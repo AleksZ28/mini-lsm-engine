@@ -1,6 +1,9 @@
 package com.ibm.internship.lsm.memtable;
 
 import java.nio.charset.StandardCharsets;
+import java.util.Collections;
+import java.util.Map;
+import java.util.Set;
 import java.util.TreeMap;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -74,11 +77,43 @@ public class MemTable {
     private long calculateEntrySize(String key, Entry entry){
         long size = key.getBytes(StandardCharsets.UTF_8).length;
 
-        if(!entry.isTombstone() && entry.value != null){
+        if(!entry.isTombstone() && entry.value != null) {
             size += entry.value.length;
         }
 
         return size;
+    }
+
+    public int entryCount() {
+        int count = 0;
+
+        for(Entry entry : map.values()) {
+            if(!entry.isTombstone()) {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
+    public int allEntryCount() {
+        return map.size();
+    }
+
+    public long getBytesSize() {
+        return byteSize.get();
+    }
+
+    public boolean isEmpty() {
+        return map.isEmpty();
+    }
+
+    public Set<Map.Entry<String,Entry>> entrySet() {
+        TreeMap<String, Entry> snapshot = new TreeMap<>();
+
+        snapshot.putAll(map);
+
+        return Collections.unmodifiableMap(snapshot).entrySet();
     }
 }
 
