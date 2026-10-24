@@ -1,5 +1,6 @@
 package com.ibm.internship.lsm.memtable;
 
+import java.nio.charset.StandardCharsets;
 import java.util.TreeMap;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -41,7 +42,12 @@ public class MemTable {
     }
 
     private void putEntry(String key, Entry newEntry) {
-        map.put(key, newEntry);
+        Entry oldEntry = map.put(key, newEntry);
+
+        long oldSize = oldEntry == null ? 0 : calculateEntrySize(key, oldEntry);
+        long newSize = calculateEntrySize(key,newEntry);
+
+        byteSize.addAndGet(newSize - oldSize);
     }
 
     public byte[] get(String key){
@@ -63,6 +69,16 @@ public class MemTable {
             throw new IllegalArgumentException("Key cannot be null");
         }
         putEntry(key, Entry.tombstone());
+    }
+
+    private long calculateEntrySize(String key, Entry entry){
+        long size = key.getBytes(StandardCharsets.UTF_8).length;
+
+        if(!entry.isTombstone() && entry.value != null){
+            size += entry.value.length;
+        }
+
+        return size;
     }
 }
 
