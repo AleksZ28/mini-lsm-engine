@@ -32,6 +32,31 @@ public class MemTable {
             return tombstone;
         }
     }
+
+    public void put(String key, byte[] value) {
+        if(key == null){
+            throw new IllegalArgumentException("Key cannot be null");
+        }
+        putEntry(key, Entry.value(value));
+    }
+
+    private void putEntry(String key, Entry newEntry) {
+        map.put(key, newEntry);
+    }
+
+    public byte[] get(String key){
+        if(key == null){
+            return null;
+        }
+
+        Entry entry = map.get(key);
+
+        if(entry == null || entry.isTombstone()){
+            return null;
+        }
+
+        return entry.getValue();
+    }
 }
 
 
