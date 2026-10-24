@@ -11,8 +11,8 @@ public class WalEncoder {
     {
         byte[] keyBytes = key.getBytes(StandardCharsets.UTF_8);
         byte[] valueBytes;
-        if (!isDelete && !value.isEmpty()) {
-            valueBytes = value.getBytes();
+        if (!isDelete && value != null && !value.isEmpty()) {
+            valueBytes = value.getBytes(StandardCharsets.UTF_8);
         } else  {
             valueBytes = new byte[0];
         }
