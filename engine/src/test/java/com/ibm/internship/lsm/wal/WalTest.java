@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
@@ -18,7 +19,7 @@ public class WalTest {
         Path walPath = tempDir.resolve("test.wal");
         try (Wal wal = new Wal(walPath)) {
             assertEquals(0, wal.size());
-            wal.append("user:1", "value1", false);
+            wal.append("user:1", "value1".getBytes(StandardCharsets.UTF_8), false);
             assertTrue(wal.size() > 0);
             long sizeBeforeDelete = wal.size();
             wal.append("user:1", null, true);
@@ -30,7 +31,7 @@ public class WalTest {
     void shouldReset(@TempDir Path tempDir) throws IOException {
         Path walPath = tempDir.resolve("test.wal");
         try (Wal wal = new Wal(walPath)) {
-            wal.append("key", "value", false);
+            wal.append("key", "value".getBytes(StandardCharsets.UTF_8), false);
             assertTrue(wal.size() > 0);
             wal.reset();
             assertEquals(0, wal.size());

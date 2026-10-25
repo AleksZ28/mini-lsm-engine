@@ -7,12 +7,12 @@ import java.util.zip.CRC32;
 public class WalEncoder {
     public static final int HEADER_SIZE = 13;
 
-    public static ByteBuffer encode(String key, String value, boolean isDelete)
+    public static ByteBuffer encode(String key, byte[] value, boolean isDelete)
     {
         byte[] keyBytes = key.getBytes(StandardCharsets.UTF_8);
         byte[] valueBytes;
-        if (!isDelete && value != null && !value.isEmpty()) {
-            valueBytes = value.getBytes(StandardCharsets.UTF_8);
+        if (!isDelete && value != null && value.length > 0) {
+            valueBytes = value;
         } else  {
             valueBytes = new byte[0];
         }

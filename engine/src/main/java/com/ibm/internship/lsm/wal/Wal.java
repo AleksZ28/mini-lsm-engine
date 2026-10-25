@@ -17,7 +17,7 @@ public class Wal implements AutoCloseable {
     }
 
 
-    public void append(String key, String value, boolean isDelete) throws IOException {
+    public void append(String key, byte[] value, boolean isDelete) throws IOException {
         ByteBuffer buffer = WalEncoder.encode(key, value, isDelete);
 
         while (buffer.hasRemaining()) {
