@@ -1,11 +1,14 @@
 package com.ibm.internship.lsm.wal;
 
+import com.ibm.internship.lsm.memtable.MemTable;
+
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.util.Objects;
 import java.util.zip.CRC32;
 
 public class WalReader implements AutoCloseable {
@@ -92,6 +95,19 @@ public class WalReader implements AutoCloseable {
 
         OpType opType = OpType.fromCode(opTypeCode);
         return new DecodedRecord(opType, key, valueBytes);
+    }
+
+    public void recover(MemTable memTable) throws IOException {
+        Objects.requireNonNull(memTable, "MemTable cannot be null");
+        channel.position(0);
+        DecodedRecord record;
+        while ((record = readNextRecord()) != null) {
+            if (record.opType == OpType.PUT) {
+                memTable.put(record.key, record.valueBytes);
+            } else if (record.opType == OpType.DELETE) {
+                memTable.delete(record.key);
+            }
+        }
     }
 
     @Override
