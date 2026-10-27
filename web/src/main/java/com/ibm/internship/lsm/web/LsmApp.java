@@ -47,4 +47,8 @@ public class LsmApp {
     public void stop() {
         app.stop();
     }
+
+    public int port() {
+        return app.port();
+    }
 }
