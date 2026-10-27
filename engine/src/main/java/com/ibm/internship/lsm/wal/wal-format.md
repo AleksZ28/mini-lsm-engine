@@ -14,4 +14,4 @@
 ### Header size: 13 bytes
 
 ## Error handling
-During recovery, `WalReader` calculates the CRC32 of bytes from the start of `OpType` to the end of `ValueBytes`. If the calculated CRC does not match the stored `CRC32`, the record is treated as corrupted and reading stops.
+During recovery, `WalDecoder` calculates the CRC32 of bytes from the start of `OpType` to the end of `ValueBytes`. If the calculated CRC does not match the stored `CRC32`, the record is treated as corrupted and reading stops.
