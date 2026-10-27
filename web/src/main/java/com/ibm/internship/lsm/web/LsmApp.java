@@ -2,6 +2,7 @@ package com.ibm.internship.lsm.web;
 
 import com.ibm.internship.lsm.api.StorageEngine;
 import io.javalin.Javalin;
+import io.javalin.json.JavalinJackson;
 
 public class LsmApp {
     private final Javalin app;
@@ -10,6 +11,8 @@ public class LsmApp {
     public LsmApp(StorageEngine engine) {
         this.engine = engine;
         this.app = Javalin.create(config -> {
+            config.jsonMapper(new JavalinJackson());
+
             config.routes.get("/",  ctx -> {
                 ctx.result("Server is working");
             });
