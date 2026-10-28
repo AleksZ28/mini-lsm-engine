@@ -17,6 +17,7 @@ import org.openjdk.jmh.annotations.TearDown;
 import org.openjdk.jmh.annotations.Warmup;
 
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Comparator;
@@ -85,7 +86,7 @@ public class LsmBenchmark {
     }
 
     @Benchmark
-    public byte[] memTableGet() {
+    public ByteBuffer memTableGet() {
         return filled.get(keyArr[(idx++ & Integer.MAX_VALUE) % keys]);
     }
 

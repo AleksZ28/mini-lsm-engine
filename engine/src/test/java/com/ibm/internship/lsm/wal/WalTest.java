@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -92,7 +93,7 @@ public class WalTest {
             MemTable memTable = new MemTable();
             wal.recover(memTable);
 
-            assertArrayEquals(updatedVal, memTable.get("k1"));
+            assertEquals(ByteBuffer.wrap(updatedVal), memTable.get("k1"));
             assertNull(memTable.get("k2"));
 
             // After recovery, wal position must be at the end so next appends work
