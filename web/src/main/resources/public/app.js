@@ -392,13 +392,6 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("btnCompact")?.addEventListener("click", handleCompactionNotImplemented);
   document.getElementById("btnClearLog")?.addEventListener("click", clearLog);
 
-  document.getElementById("keyInput")?.addEventListener("keydown", e => {
-    if (e.key === "Enter") handleGet();
-  });
-  document.getElementById("valueInput")?.addEventListener("keydown", e => {
-    if (e.key === "Enter") handlePut();
-  });
-
   checkEngineStatus();
   setInterval(checkEngineStatus, 10000);
 });
