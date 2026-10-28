@@ -118,4 +118,17 @@ class LsmAppTest {
         assertEquals(400, postResponse.statusCode());
         assertTrue(postResponse.body().contains("key cannot be null"));
     }
+
+    @Test
+    @DisplayName("Should serve static dashboard index.html")
+    void shouldServeStaticDashboard() throws Exception {
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(baseUrl + "/index.html"))
+                .GET()
+                .build();
+
+        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        assertEquals(200, response.statusCode());
+        assertTrue(response.body().contains("MINI-LSM STORAGE ENGINE DASHBOARD"));
+    }
 }
