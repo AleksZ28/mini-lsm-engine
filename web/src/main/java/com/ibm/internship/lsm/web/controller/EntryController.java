@@ -4,8 +4,8 @@ import com.ibm.internship.lsm.api.StorageEngine;
 import com.ibm.internship.lsm.web.dto.EntryRequest;
 import io.javalin.http.Context;
 
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
-import java.util.Optional;
 
 public class EntryController {
     private final StorageEngine engine;
@@ -22,10 +22,11 @@ public class EntryController {
 
     public void readEntry(Context ctx) throws Exception {
         String key = ctx.pathParam("key");
-        Optional<byte[]> value = engine.get(key);
+        ByteBuffer value = engine.get(key);
 
-        if (value.isPresent()) {
-            ctx.status(200).result(new String(value.get(), StandardCharsets.UTF_8));
+        if (value != null) {
+            String result = StandardCharsets.UTF_8.decode(value).toString();
+            ctx.status(200).result(result);
         } else {
             ctx.status(404).result("Entry not found");
         }

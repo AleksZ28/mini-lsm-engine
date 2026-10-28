@@ -5,16 +5,16 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
-import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 class MiniLsmEngineTest {
 
     @Test
-    @DisplayName("Should put and retrieve value successfully")
+    @DisplayName("Should put and retrieve value successfully as ByteBuffer")
     void shouldPutAndGet(@TempDir Path tempDir) throws IOException {
         Path walPath = tempDir.resolve("test.wal");
 
@@ -22,23 +22,23 @@ class MiniLsmEngineTest {
             byte[] value = "value123".getBytes(StandardCharsets.UTF_8);
             engine.put("user:1", value);
 
-            Optional<byte[]> result = engine.get("user:1");
-            assertTrue(result.isPresent(), "Value should be present");
-            assertArrayEquals(value, result.get());
+            ByteBuffer result = engine.get("user:1");
+            assertNotNull(result, "Value should be present");
+            assertEquals(ByteBuffer.wrap(value), result);
         }
     }
 
     @Test
-    @DisplayName("Should return empty Optional for non-existent key")
-    void shouldReturnEmptyForNonExistentKey(@TempDir Path tempDir) throws IOException {
+    @DisplayName("Should return null for non-existent key")
+    void shouldReturnNullForNonExistentKey(@TempDir Path tempDir) throws IOException {
         Path walPath = tempDir.resolve("test.wal");
 
         try (MiniLsmEngine engine = new MiniLsmEngine(walPath)) {
-            Optional<byte[]> result = engine.get("missing:key");
-            assertTrue(result.isEmpty(), "Non-existent key should return empty Optional");
+            ByteBuffer result = engine.get("missing:key");
+            assertNull(result, "Non-existent key should return null");
 
-            Optional<byte[]> nullResult = engine.get(null);
-            assertTrue(nullResult.isEmpty(), "Null key should return empty Optional");
+            ByteBuffer nullResult = engine.get(null);
+            assertNull(nullResult, "Null key should return null");
         }
     }
 
@@ -49,10 +49,10 @@ class MiniLsmEngineTest {
 
         try (MiniLsmEngine engine = new MiniLsmEngine(walPath)) {
             engine.put("user:1", "active".getBytes(StandardCharsets.UTF_8));
-            assertTrue(engine.get("user:1").isPresent());
+            assertNotNull(engine.get("user:1"));
 
             engine.delete("user:1");
-            assertTrue(engine.get("user:1").isEmpty(), "Deleted key should return empty Optional");
+            assertNull(engine.get("user:1"), "Deleted key should return null");
         }
     }
 
@@ -87,17 +87,17 @@ class MiniLsmEngineTest {
         try (MiniLsmEngine engine = new MiniLsmEngine(walPath)) {
             engine.recoverFromWal();
 
-            assertTrue(engine.get("user:1").isEmpty(), "Deleted user:1 should remain deleted after recovery");
-            Optional<byte[]> user2 = engine.get("user:2");
-            assertTrue(user2.isPresent(), "user:2 should be restored from WAL");
-            assertArrayEquals(bob, user2.get());
+            assertNull(engine.get("user:1"), "Deleted user:1 should remain deleted after recovery");
+            ByteBuffer user2 = engine.get("user:2");
+            assertNotNull(user2, "user:2 should be restored from WAL");
+            assertEquals(ByteBuffer.wrap(bob), user2);
 
             // Verify engine can continue accepting new writes after recovery
             byte[] charlie = "Charlie".getBytes(StandardCharsets.UTF_8);
             engine.put("user:3", charlie);
-            Optional<byte[]> user3 = engine.get("user:3");
-            assertTrue(user3.isPresent(), "user:3 should be written");
-            assertArrayEquals(charlie, user3.get());
+            ByteBuffer user3 = engine.get("user:3");
+            assertNotNull(user3, "user:3 should be written");
+            assertEquals(ByteBuffer.wrap(charlie), user3);
         }
     }
 }

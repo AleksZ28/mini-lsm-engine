@@ -1,5 +1,6 @@
 package com.ibm.internship.lsm.memtable;
 
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.Map;
@@ -28,8 +29,8 @@ public class MemTable {
             return new Entry(null,true);
         }
 
-        public byte[] getValue() {
-            return value == null ? null : value.clone();
+        public ByteBuffer getValue() {
+            return value == null ? null : ByteBuffer.wrap(value).asReadOnlyBuffer();
         }
 
         public boolean isTombstone() {
@@ -53,7 +54,7 @@ public class MemTable {
         byteSize.addAndGet(newSize - oldSize);
     }
 
-    public byte[] get(String key){
+    public ByteBuffer get(String key){
         if(key == null){
             return null;
         }

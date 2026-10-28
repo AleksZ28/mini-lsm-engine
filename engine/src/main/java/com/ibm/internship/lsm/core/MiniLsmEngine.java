@@ -5,8 +5,8 @@ import com.ibm.internship.lsm.memtable.MemTable;
 import com.ibm.internship.lsm.wal.Wal;
 
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.nio.file.Path;
-import java.util.Optional;
 
 public class MiniLsmEngine implements StorageEngine {
     private final MemTable activeMemTable;
@@ -31,13 +31,12 @@ public class MiniLsmEngine implements StorageEngine {
     }
 
     @Override
-    public Optional<byte[]> get(String key) throws IOException {
+    public ByteBuffer get(String key) throws IOException {
         if (key == null) {
-            return Optional.empty();
+            return null;
         }
 
-        byte[] value = activeMemTable.get(key);
-        return Optional.ofNullable(value);
+        return activeMemTable.get(key);
     }
 
     @Override
