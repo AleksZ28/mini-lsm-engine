@@ -153,4 +153,65 @@ public class WalTest {
             assertThrows(IOException.class, wal::readNextRecord);
         }
     }
+
+    @Test
+    @DisplayName("Should recover valid records and truncate incomplete trailing record on crash")
+    void shouldRecoverAndTruncateIncompleteTrailingRecord(@TempDir Path tempDir) throws IOException {
+        Path walPath = tempDir.resolve("torn-write.wal");
+        byte[] v1 = "val1".getBytes(StandardCharsets.UTF_8);
+        byte[] v2 = "val2".getBytes(StandardCharsets.UTF_8);
+
+        long validSize;
+        try (Wal wal = new Wal(walPath)) {
+            wal.append("k1", v1, false);
+            wal.append("k2", v2, false);
+            validSize = wal.size();
+        }
+
+        // Simulate crash during 3rd write: append partial header (e.g. 7 bytes of garbage)
+        Files.write(walPath, new byte[]{0x12, 0x34, 0x56, 0x78, 0x01, 0x00, 0x05}, StandardOpenOption.APPEND);
+        assertTrue(Files.size(walPath) > validSize);
+
+        try (Wal wal = new Wal(walPath)) {
+            MemTable memTable = new MemTable();
+            wal.recover(memTable);
+
+            // Valid records before the torn write must be restored
+            assertEquals(ByteBuffer.wrap(v1), memTable.get("k1"));
+            assertEquals(ByteBuffer.wrap(v2), memTable.get("k2"));
+
+            // File must be truncated back to the last valid offset
+            assertEquals(validSize, wal.size());
+            assertEquals(validSize, wal.position());
+            assertEquals(validSize, Files.size(walPath));
+
+            // Subsequent writes after recovery must work and append cleanly
+            wal.append("k3", "val3".getBytes(StandardCharsets.UTF_8), false);
+            assertTrue(wal.size() > validSize);
+        }
+    }
+
+    @Test
+    @DisplayName("Should fail recovery when corruption is in the middle of log")
+    void shouldFailRecoveryWhenCorruptionIsInMiddleOfLog(@TempDir Path tempDir) throws IOException {
+        Path walPath = tempDir.resolve("corrupted-middle.wal");
+
+        try (Wal wal = new Wal(walPath)) {
+            wal.append("k1", "v1".getBytes(StandardCharsets.UTF_8), false);
+            wal.append("k2", "v2".getBytes(StandardCharsets.UTF_8), false);
+            wal.append("k3", "v3".getBytes(StandardCharsets.UTF_8), false);
+        }
+
+        // Corrupt the CRC of the middle record (Record 2 starts at offset 17: 13 header + 2 key + 2 val)
+        byte[] allBytes = Files.readAllBytes(walPath);
+        int record2CrcOffset = 17;
+        allBytes[record2CrcOffset] = (byte) (allBytes[record2CrcOffset] ^ 0xFF);
+        Files.write(walPath, allBytes);
+
+        try (Wal wal = new Wal(walPath)) {
+            MemTable memTable = new MemTable();
+            // Recovery must throw IOException and not silently drop valid subsequent records
+            assertThrows(IOException.class, () -> wal.recover(memTable));
+        }
+    }
 }

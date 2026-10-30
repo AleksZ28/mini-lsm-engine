@@ -66,14 +66,35 @@ public class Wal implements AutoCloseable {
     public void recover(MemTable memTable) throws IOException {
         Objects.requireNonNull(memTable, "MemTable cannot be null");
         channel.position(0);
-        WalDecoder.DecodedRecord record;
-        while ((record = readNextRecord()) != null) {
+
+        long lastValidOffset = channel.position();
+
+        while (true) {
+            lastValidOffset = channel.position();
+            WalDecoder.DecodedRecord record;
+
+            try {
+                record = readNextRecord();
+            } catch (IOException e) {
+                if (channel.position() == channel.size()) {
+                    channel.truncate(lastValidOffset);
+                    channel.position(lastValidOffset);
+                    return;
+                }
+                throw e;
+            }
+
+            if (record == null) {
+                break;
+            }
+
             if (record.getOpType() == OpType.PUT) {
                 memTable.put(record.getKey(), record.getValueBytes());
             } else if (record.getOpType() == OpType.DELETE) {
                 memTable.delete(record.getKey());
             }
         }
+
         channel.position(channel.size());
     }
 
