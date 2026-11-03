@@ -2,21 +2,33 @@ package com.ibm.internship.lsm.core;
 
 import com.ibm.internship.lsm.api.StorageEngine;
 import com.ibm.internship.lsm.memtable.MemTable;
+import com.ibm.internship.lsm.sstable.SSTableReader;
 import com.ibm.internship.lsm.sstable.SSTableWriter;
+import com.ibm.internship.lsm.wal.OpType;
 import com.ibm.internship.lsm.wal.Wal;
+import com.ibm.internship.lsm.wal.WalDecoder;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.Objects;
 
 public class MiniLsmEngine implements StorageEngine {
     private MemTable activeMemTable;
     private final Wal wal;
     private final Path sstDir;
+    private final List<SSTableReader> sstables;
 
     public MiniLsmEngine(Path walPath, Path sstDir) throws IOException {
+        this(walPath, sstDir, Collections.emptyList());
+    }
+
+    public MiniLsmEngine(Path walPath, Path sstDir, List<SSTableReader> sstables) throws IOException {
         this.activeMemTable = new MemTable();
         this.wal = new Wal(walPath);
         if (sstDir != null && sstDir.getFileName() != null && sstDir.getFileName().toString().endsWith(".sst")) {
@@ -27,6 +39,7 @@ public class MiniLsmEngine implements StorageEngine {
         if (!Files.exists(this.sstDir)) {
             Files.createDirectories(this.sstDir);
         }
+        this.sstables = new ArrayList<>(Objects.requireNonNull(sstables, "sstables cannot be null"));
     }
 
     @Override
@@ -48,7 +61,25 @@ public class MiniLsmEngine implements StorageEngine {
             return null;
         }
 
-        return activeMemTable.get(key);
+        MemTable.Entry memEntry = activeMemTable.getEntry(key);
+        if (memEntry != null) {
+            if (memEntry.isTombstone()) {
+                return null;
+            }
+            return memEntry.getValue();
+        }
+
+        for (SSTableReader sstable : sstables) {
+            WalDecoder.DecodedRecord record = sstable.readRecord(key);
+            if (record != null) {
+                if (record.getOpType() == OpType.DELETE) {
+                    return null;
+                }
+                return ByteBuffer.wrap(record.getValueBytes()).asReadOnlyBuffer();
+            }
+        }
+
+        return null;
     }
 
     @Override
@@ -79,6 +110,8 @@ public class MiniLsmEngine implements StorageEngine {
             sstwriter.finish();
             wal.reset();
         }
+
+        addSSTable(SSTableReader.open(sstPath));
     }
 
     @Override
@@ -110,8 +143,38 @@ public class MiniLsmEngine implements StorageEngine {
         return maxIndex;
     }
 
+    public void addSSTable(SSTableReader sstable) {
+        Objects.requireNonNull(sstable, "sstable cannot be null");
+        sstables.addFirst(sstable);
+    }
+
+    public List<SSTableReader> getSstables() {
+        return Collections.unmodifiableList(sstables);
+    }
+
     @Override
     public void close() throws IOException {
-        wal.close();
+        IOException exception = null;
+        try {
+            wal.close();
+        } catch (IOException e) {
+            exception = e;
+        }
+
+        for (SSTableReader sstable : sstables) {
+            try {
+                sstable.close();
+            } catch (IOException e) {
+                if (exception == null) {
+                    exception = e;
+                } else {
+                    exception.addSuppressed(e);
+                }
+            }
+        }
+
+        if (exception != null) {
+            throw exception;
+        }
     }
 }

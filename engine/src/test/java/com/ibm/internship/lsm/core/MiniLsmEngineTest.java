@@ -1,18 +1,82 @@
 package com.ibm.internship.lsm.core;
 
+import com.ibm.internship.lsm.sstable.IndexEntry;
+import com.ibm.internship.lsm.sstable.SSTableFooter;
+import com.ibm.internship.lsm.sstable.SSTableReader;
+import com.ibm.internship.lsm.wal.WalEncoder;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 class MiniLsmEngineTest {
+
+    record TestRecord(String key, byte[] value, boolean isDelete) {}
+
+    private SSTableReader createSSTableReader(Path path, List<TestRecord> records) throws IOException {
+        List<TestRecord> sortedRecords = new ArrayList<>(records);
+        sortedRecords.sort(Comparator.comparing(TestRecord::key));
+
+        try (FileChannel channel = FileChannel.open(path, StandardOpenOption.CREATE, StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING)) {
+            long currentOffset = 0;
+            List<IndexEntry> indexEntries = new ArrayList<>();
+
+            for (TestRecord r : sortedRecords) {
+                ByteBuffer recordBuf = WalEncoder.encode(r.key(), r.value(), r.isDelete());
+                int recordLen = recordBuf.remaining();
+                long offset = currentOffset;
+
+                while (recordBuf.hasRemaining()) {
+                    channel.write(recordBuf);
+                }
+
+                currentOffset += recordLen;
+                indexEntries.add(new IndexEntry(r.key(), offset, recordLen));
+            }
+
+            long indexOffset = currentOffset;
+
+            for (IndexEntry ie : indexEntries) {
+                byte[] keyBytes = ie.key().getBytes(StandardCharsets.UTF_8);
+                ByteBuffer buf = ByteBuffer.allocate(16 + keyBytes.length);
+                buf.putInt(keyBytes.length);
+                buf.put(keyBytes);
+                buf.putLong(ie.offset());
+                buf.putInt(ie.recordLength());
+                buf.flip();
+
+                while (buf.hasRemaining()) {
+                    channel.write(buf);
+                }
+            }
+
+            int indexLength = (int) (channel.position() - indexOffset);
+            ByteBuffer footer = ByteBuffer.allocate(SSTableFooter.FOOTER_SIZE);
+            footer.putLong(indexOffset);
+            footer.putInt(indexLength);
+            footer.putInt(indexEntries.size());
+            footer.putLong(SSTableFooter.MAGIC_NUMBER);
+            footer.flip();
+
+            while (footer.hasRemaining()) {
+                channel.write(footer);
+            }
+        }
+
+        return SSTableReader.open(path);
+    }
 
     @Test
     @DisplayName("Should put and retrieve value successfully as ByteBuffer")
@@ -197,5 +261,113 @@ class MiniLsmEngineTest {
             assertTrue(Files.exists(sstDir.resolve("1.sst")), "1.sst must still exist");
             assertTrue(Files.exists(sstDir.resolve("2.sst")), "Restarted engine flush should create 2.sst");
         }
+    }
+
+    @Test
+    @DisplayName("Should retrieve value from SSTable when key is absent in MemTable")
+    void shouldReadFromSSTableWhenNotInMemTable(@TempDir Path tempDir) throws IOException {
+        Path walPath = tempDir.resolve("engine.wal");
+        Path sstPath = tempDir.resolve("00001.sst");
+        byte[] sstValue = "sstable_val".getBytes(StandardCharsets.UTF_8);
+
+        SSTableReader reader = createSSTableReader(sstPath, List.of(
+                new TestRecord("disk:key", sstValue, false)
+        ));
+
+        try (MiniLsmEngine engine = new MiniLsmEngine(walPath, tempDir, List.of(reader))) {
+            ByteBuffer result = engine.get("disk:key");
+            assertNotNull(result);
+            assertEquals(ByteBuffer.wrap(sstValue), result);
+
+            assertNull(engine.get("non:existent"));
+        }
+    }
+
+    @Test
+    @DisplayName("Should prioritize MemTable updates over on-disk SSTable data")
+    void shouldPrioritizeMemTableOverSSTable(@TempDir Path tempDir) throws IOException {
+        Path walPath = tempDir.resolve("engine.wal");
+        Path sstPath = tempDir.resolve("00001.sst");
+        byte[] oldVal = "old_value".getBytes(StandardCharsets.UTF_8);
+        byte[] newVal = "new_value".getBytes(StandardCharsets.UTF_8);
+
+        SSTableReader reader = createSSTableReader(sstPath, List.of(
+                new TestRecord("user:1", oldVal, false)
+        ));
+
+        try (MiniLsmEngine engine = new MiniLsmEngine(walPath, tempDir, List.of(reader))) {
+            assertEquals(ByteBuffer.wrap(oldVal), engine.get("user:1"));
+
+            engine.put("user:1", newVal);
+            assertEquals(ByteBuffer.wrap(newVal), engine.get("user:1"));
+        }
+    }
+
+    @Test
+    @DisplayName("Should respect MemTable tombstone and not resurrect older SSTable value")
+    void shouldRespectMemTableTombstone(@TempDir Path tempDir) throws IOException {
+        Path walPath = tempDir.resolve("engine.wal");
+        Path sstPath = tempDir.resolve("00001.sst");
+        byte[] oldVal = "persisted_value".getBytes(StandardCharsets.UTF_8);
+
+        SSTableReader reader = createSSTableReader(sstPath, List.of(
+                new TestRecord("user:1", oldVal, false)
+        ));
+
+        try (MiniLsmEngine engine = new MiniLsmEngine(walPath, tempDir, List.of(reader))) {
+            assertEquals(ByteBuffer.wrap(oldVal), engine.get("user:1"));
+
+            engine.delete("user:1");
+            assertNull(engine.get("user:1"));
+        }
+    }
+
+    @Test
+    @DisplayName("Should search SSTables from newest to oldest and respect SSTable tombstones")
+    void shouldSearchMultipleSSTablesInOrder(@TempDir Path tempDir) throws IOException {
+        Path walPath = tempDir.resolve("engine.wal");
+        Path sstOld = tempDir.resolve("00001.sst");
+        Path sstNew = tempDir.resolve("00002.sst");
+
+        byte[] k1Old = "k1_v1".getBytes(StandardCharsets.UTF_8);
+        byte[] k1New = "k1_v2".getBytes(StandardCharsets.UTF_8);
+        byte[] k2Val = "k2_live".getBytes(StandardCharsets.UTF_8);
+
+        SSTableReader oldReader = createSSTableReader(sstOld, List.of(
+                new TestRecord("k1", k1Old, false),
+                new TestRecord("k2", k2Val, false)
+        ));
+
+        SSTableReader newReader = createSSTableReader(sstNew, List.of(
+                new TestRecord("k1", k1New, false),
+                new TestRecord("k2", null, true)
+        ));
+
+        try (MiniLsmEngine engine = new MiniLsmEngine(walPath, tempDir)) {
+            engine.addSSTable(oldReader);
+            engine.addSSTable(newReader);
+
+            assertEquals(2, engine.getSstables().size());
+            assertEquals(ByteBuffer.wrap(k1New), engine.get("k1"));
+            assertNull(engine.get("k2"));
+        }
+    }
+
+    @Test
+    @DisplayName("Should close all underlying SSTableReaders when engine closes")
+    void shouldCloseSSTableReadersOnEngineClose(@TempDir Path tempDir) throws IOException {
+        Path walPath = tempDir.resolve("engine.wal");
+        Path sstPath = tempDir.resolve("00001.sst");
+
+        SSTableReader reader = createSSTableReader(sstPath, List.of(
+                new TestRecord("k1", "v1".getBytes(StandardCharsets.UTF_8), false)
+        ));
+
+        MiniLsmEngine engine = new MiniLsmEngine(walPath, tempDir, List.of(reader));
+        assertNotNull(engine.get("k1"));
+
+        engine.close();
+
+        assertThrows(IOException.class, () -> reader.get("k1"));
     }
 }
