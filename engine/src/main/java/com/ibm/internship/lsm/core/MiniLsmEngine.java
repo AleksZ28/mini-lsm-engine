@@ -91,7 +91,7 @@ public class MiniLsmEngine implements StorageEngine {
 
     public void addSSTable(SSTableReader sstable) {
         Objects.requireNonNull(sstable, "sstable cannot be null");
-        sstables.add(0, sstable);
+        sstables.addFirst(sstable);
     }
 
     public List<SSTableReader> getSstables() {

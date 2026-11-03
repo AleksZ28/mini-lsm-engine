@@ -25,7 +25,7 @@ public class SSTableIteratorTest {
 
     record TestRecord(String key, byte[] value, boolean isDelete) {}
 
-    private Path createSSTable(Path path, List<TestRecord> records) throws IOException {
+    private void createSSTable(Path path, List<TestRecord> records) throws IOException {
         List<TestRecord> sortedRecords = new ArrayList<>(records);
         sortedRecords.sort(Comparator.comparing(TestRecord::key));
 
@@ -74,7 +74,6 @@ public class SSTableIteratorTest {
                 channel.write(footer);
             }
         }
-        return path;
     }
 
     @Test
@@ -101,10 +100,10 @@ public class SSTableIteratorTest {
 
             assertEquals(4, collected.size());
 
-            assertEquals("k1", collected.get(0).key());
-            assertEquals(ByteBuffer.wrap(v1), collected.get(0).value());
-            assertFalse(collected.get(0).isTombstone());
-            assertEquals(OpType.PUT, collected.get(0).opType());
+            assertEquals("k1", collected.getFirst().key());
+            assertEquals(ByteBuffer.wrap(v1), collected.getFirst().value());
+            assertFalse(collected.getFirst().isTombstone());
+            assertEquals(OpType.PUT, collected.getFirst().opType());
 
             assertEquals("k2", collected.get(1).key());
             assertEquals(ByteBuffer.wrap(v2), collected.get(1).value());

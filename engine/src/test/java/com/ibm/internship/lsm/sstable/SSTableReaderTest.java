@@ -23,7 +23,7 @@ public class SSTableReaderTest {
 
     record TestRecord(String key, byte[] value, boolean isDelete) {}
 
-    private Path createSSTable(Path path, List<TestRecord> records) throws IOException {
+    private void createSSTable(Path path, List<TestRecord> records) throws IOException {
         List<TestRecord> sortedRecords = new ArrayList<>(records);
         sortedRecords.sort(java.util.Comparator.comparing(TestRecord::key));
 
@@ -72,7 +72,6 @@ public class SSTableReaderTest {
                 channel.write(footer);
             }
         }
-        return path;
     }
 
     @Test

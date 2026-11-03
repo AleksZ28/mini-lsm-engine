@@ -52,6 +52,7 @@ public class SSTableFooterTest {
         indexBuf.get(indexBytes);
 
         byte[] dummyData = new byte[60];
+        java.util.Arrays.fill(dummyData, (byte) 0xAA);
         long indexOffset = dummyData.length;
         int indexLength = indexBytes.length;
         int entryCount = 3;
@@ -100,7 +101,10 @@ public class SSTableFooterTest {
         Path sstPath = tempDir.resolve("truncated.sst");
         Files.write(sstPath, new byte[12]); // only 12 bytes
 
-        IOException ex = assertThrows(IOException.class, () -> SSTableReader.open(sstPath));
+        IOException ex = assertThrows(IOException.class, () -> {
+            try (SSTableReader ignored = SSTableReader.open(sstPath)) {
+            }
+        });
         assertTrue(ex.getMessage().contains("smaller than footer size"), ex.getMessage());
     }
 
@@ -110,7 +114,10 @@ public class SSTableFooterTest {
         Path sstPath = tempDir.resolve("empty_0bytes.sst");
         Files.createFile(sstPath);
 
-        IOException ex = assertThrows(IOException.class, () -> SSTableReader.open(sstPath));
+        IOException ex = assertThrows(IOException.class, () -> {
+            try (SSTableReader ignored = SSTableReader.open(sstPath)) {
+            }
+        });
         assertTrue(ex.getMessage().contains("smaller than footer size"), ex.getMessage());
     }
 
@@ -121,7 +128,10 @@ public class SSTableFooterTest {
         long invalidMagic = 0xDEADBEEFCAFEBABEL;
         writeFooterFile(sstPath, null, 0, 0, 0, invalidMagic);
 
-        IOException ex = assertThrows(IOException.class, () -> SSTableReader.open(sstPath));
+        IOException ex = assertThrows(IOException.class, () -> {
+            try (SSTableReader ignored = SSTableReader.open(sstPath)) {
+            }
+        });
         assertTrue(ex.getMessage().contains("magic number mismatch"), ex.getMessage());
     }
 
@@ -130,9 +140,13 @@ public class SSTableFooterTest {
     void shouldThrowWhenIndexBoundaryMisaligned(@TempDir Path tempDir) throws IOException {
         Path sstPath = tempDir.resolve("misaligned.sst");
         byte[] dummyData = new byte[100];
+        java.util.Arrays.fill(dummyData, (byte) 0xAA);
         writeFooterFile(sstPath, dummyData, 70, 40, 2, SSTableFooter.MAGIC_NUMBER);
 
-        IOException ex = assertThrows(IOException.class, () -> SSTableReader.open(sstPath));
+        IOException ex = assertThrows(IOException.class, () -> {
+            try (SSTableReader ignored = SSTableReader.open(sstPath)) {
+            }
+        });
         assertTrue(ex.getMessage().contains("does not align with footer start"), ex.getMessage());
     }
 
@@ -142,7 +156,10 @@ public class SSTableFooterTest {
         Path sstPath = tempDir.resolve("inconsistent_index.sst");
         writeFooterFile(sstPath, null, 0, 0, 5, SSTableFooter.MAGIC_NUMBER);
 
-        IOException ex = assertThrows(IOException.class, () -> SSTableReader.open(sstPath));
+        IOException ex = assertThrows(IOException.class, () -> {
+            try (SSTableReader ignored = SSTableReader.open(sstPath)) {
+            }
+        });
         assertTrue(ex.getMessage().contains("entryCount is 5 but indexLength is 0"), ex.getMessage());
     }
 
@@ -153,7 +170,10 @@ public class SSTableFooterTest {
         byte[] dummyIndex = new byte[20];
         writeFooterFile(sstPath, dummyIndex, 0, 20, 0, SSTableFooter.MAGIC_NUMBER);
 
-        IOException ex = assertThrows(IOException.class, () -> SSTableReader.open(sstPath));
+        IOException ex = assertThrows(IOException.class, () -> {
+            try (SSTableReader ignored = SSTableReader.open(sstPath)) {
+            }
+        });
         assertTrue(ex.getMessage().contains("entryCount is 0 but indexLength is 20"), ex.getMessage());
     }
 
@@ -163,7 +183,10 @@ public class SSTableFooterTest {
         Path sstPath = tempDir.resolve("fail_close.sst");
         writeFooterFile(sstPath, null, 0, 0, 0, 0x123456L); // invalid magic
 
-        assertThrows(IOException.class, () -> new SSTableReader(sstPath));
+        assertThrows(IOException.class, () -> {
+            try (SSTableReader ignored = new SSTableReader(sstPath)) {
+            }
+        });
 
         Files.delete(sstPath);
         assertFalse(Files.exists(sstPath));

@@ -91,7 +91,7 @@ public class SSTableReader implements AutoCloseable, Iterable<SSTableEntry> {
 
     @Override
     public SSTableIterator iterator() {
-        return new SSTableIterator(channel, index, 0);
+        return new SSTableIterator(channel, index);
     }
 
     public SSTableIterator iterator(String fromKey) {
