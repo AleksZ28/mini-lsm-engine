@@ -68,6 +68,13 @@ public class MemTable {
         return entry.getValue();
     }
 
+    public Entry getEntry(String key) {
+        if (key == null) {
+            return null;
+        }
+        return map.get(key);
+    }
+
     public void delete(String key) {
         if(key == null){
             throw new IllegalArgumentException("Key cannot be null");
