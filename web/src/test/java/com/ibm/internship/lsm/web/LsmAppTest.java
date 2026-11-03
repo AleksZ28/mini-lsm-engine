@@ -27,7 +27,8 @@ class LsmAppTest {
     @BeforeEach
     void setUp(@TempDir Path tempDir) throws IOException {
         Path walPath = tempDir.resolve("test.wal");
-        engine = new MiniLsmEngine(walPath);
+        Path sstPath = tempDir.resolve("test.sst");
+        engine = new MiniLsmEngine(walPath, sstPath);
 
         app = new LsmApp(engine);
         app.start(0); // Port 0 assigns a free ephemeral port
