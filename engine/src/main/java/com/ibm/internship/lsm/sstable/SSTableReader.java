@@ -10,7 +10,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.Objects;
 
-public class SSTableReader implements AutoCloseable {
+public class SSTableReader implements AutoCloseable, Iterable<SSTableEntry> {
     private final Path path;
     private final FileChannel channel;
     private final SSTableFooter footer;
@@ -87,6 +87,16 @@ public class SSTableReader implements AutoCloseable {
             return false;
         }
         return index.find(key) != null;
+    }
+
+    @Override
+    public SSTableIterator iterator() {
+        return new SSTableIterator(channel, index, 0);
+    }
+
+    public SSTableIterator iterator(String fromKey) {
+        int startIndex = index.findLowerBoundIndex(fromKey);
+        return new SSTableIterator(channel, index, startIndex);
     }
 
     public SSTableFooter getFooter() {

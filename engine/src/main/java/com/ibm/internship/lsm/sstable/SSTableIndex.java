@@ -128,6 +128,31 @@ public class SSTableIndex {
         return null;
     }
 
+    public int findLowerBoundIndex(String key) {
+        if (key == null || entries.isEmpty()) {
+            return 0;
+        }
+
+        int low = 0;
+        int high = entries.size() - 1;
+
+        while (low <= high) {
+            int mid = (low + high) >>> 1;
+            IndexEntry midVal = entries.get(mid);
+            int cmp = midVal.key().compareTo(key);
+
+            if (cmp < 0) {
+                low = mid + 1;
+            } else if (cmp > 0) {
+                high = mid - 1;
+            } else {
+                return mid;
+            }
+        }
+
+        return low;
+    }
+
     public List<IndexEntry> getEntries() {
         return entries;
     }
