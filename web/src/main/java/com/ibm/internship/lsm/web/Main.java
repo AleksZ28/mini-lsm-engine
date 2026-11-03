@@ -13,11 +13,12 @@ public class Main {
                 : 7070;
 
         Path walPath = Path.of("data", "log.wal");
+        Path sstPath = Path.of("data");
         if (walPath.getParent() != null) {
             Files.createDirectories(walPath.getParent());
         }
 
-        MiniLsmEngine engine = new MiniLsmEngine(walPath);
+        MiniLsmEngine engine = new MiniLsmEngine(walPath, sstPath);
         engine.recoverFromWal();
 
         LsmApp app = new LsmApp(engine);

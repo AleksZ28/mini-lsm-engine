@@ -1,5 +1,6 @@
 package com.ibm.internship.lsm.sstable;
 
+import com.ibm.internship.lsm.memtable.MemTable;
 import com.ibm.internship.lsm.wal.WalEncoder;
 
 import java.io.IOException;
@@ -10,6 +11,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 public class SSTableWriter implements AutoCloseable {
     private final FileChannel channel;
@@ -75,6 +77,21 @@ public class SSTableWriter implements AutoCloseable {
         }
 
         channel.force(false);
+    }
+
+    public void writeFromMemTable(MemTable memTable) throws IOException {
+        for (Map.Entry<String, MemTable.Entry> entry : memTable.entrySet()) {
+            MemTable.Entry entryValue = entry.getValue();
+            byte[] valueBytes = null;
+
+            if (entryValue.getValue() != null && !entryValue.isTombstone()) {
+                ByteBuffer buffer = entryValue.getValue().duplicate();
+                valueBytes = new byte[buffer.remaining()];
+                buffer.get(valueBytes);
+            }
+
+            this.append(entry.getKey(), valueBytes, entryValue.isTombstone());
+        }
     }
 
     @Override
