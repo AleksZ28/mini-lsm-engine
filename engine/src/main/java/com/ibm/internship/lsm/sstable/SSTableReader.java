@@ -6,16 +6,21 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.Objects;
 
+/**
+ * Reader for immutable SSTable files on disk.
+ */
 public class SSTableReader implements AutoCloseable {
     private final Path path;
     private final FileChannel channel;
     private final SSTableFooter footer;
+    private final SSTableIndex index;
 
     public SSTableReader(Path path) throws IOException {
         this.path = Objects.requireNonNull(path, "path cannot be null");
         this.channel = FileChannel.open(path, StandardOpenOption.READ);
         try {
             this.footer = SSTableFooter.read(this.channel);
+            this.index = SSTableIndex.read(this.channel, this.footer);
         } catch (Throwable t) {
             try {
                 this.channel.close();
@@ -32,6 +37,10 @@ public class SSTableReader implements AutoCloseable {
 
     public SSTableFooter getFooter() {
         return footer;
+    }
+
+    public SSTableIndex getIndex() {
+        return index;
     }
 
     public Path getPath() {

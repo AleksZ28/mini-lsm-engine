@@ -38,12 +38,30 @@ public class SSTableFooterTest {
     @DisplayName("Should successfully parse a valid SSTable footer")
     void shouldParseValidFooter(@TempDir Path tempDir) throws IOException {
         Path sstPath = tempDir.resolve("valid.sst");
-        byte[] dummyDataAndIndex = new byte[100]; // 70 bytes data, 30 bytes index
-        long indexOffset = 70;
-        int indexLength = 30;
+
+        // 3 valid index entries
+        ByteBuffer indexBuf = ByteBuffer.allocate(3 * (4 + 4 + 8 + 4));
+        for (int i = 1; i <= 3; i++) {
+            byte[] kb = ("key" + i).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            indexBuf.putInt(kb.length);
+            indexBuf.put(kb);
+            indexBuf.putLong((i - 1) * 20);
+            indexBuf.putInt(20);
+        }
+        indexBuf.flip();
+        byte[] indexBytes = new byte[indexBuf.remaining()];
+        indexBuf.get(indexBytes);
+
+        byte[] dummyData = new byte[60];
+        long indexOffset = dummyData.length;
+        int indexLength = indexBytes.length;
         int entryCount = 3;
 
-        writeFooterFile(sstPath, dummyDataAndIndex, indexOffset, indexLength, entryCount, SSTableFooter.MAGIC_NUMBER);
+        byte[] combined = new byte[dummyData.length + indexLength];
+        System.arraycopy(dummyData, 0, combined, 0, dummyData.length);
+        System.arraycopy(indexBytes, 0, combined, dummyData.length, indexLength);
+
+        writeFooterFile(sstPath, combined, indexOffset, indexLength, entryCount, SSTableFooter.MAGIC_NUMBER);
 
         try (FileChannel channel = FileChannel.open(sstPath, StandardOpenOption.READ)) {
             SSTableFooter footer = SSTableFooter.read(channel);
@@ -57,7 +75,7 @@ public class SSTableFooterTest {
             assertEquals(indexOffset, reader.getFooter().indexOffset());
             assertEquals(indexLength, reader.getFooter().indexLength());
             assertEquals(entryCount, reader.getFooter().entryCount());
-            assertEquals(dummyDataAndIndex.length + SSTableFooter.FOOTER_SIZE, reader.getFileSize());
+            assertEquals(combined.length + SSTableFooter.FOOTER_SIZE, reader.getFileSize());
             assertEquals(sstPath, reader.getPath());
         }
     }
