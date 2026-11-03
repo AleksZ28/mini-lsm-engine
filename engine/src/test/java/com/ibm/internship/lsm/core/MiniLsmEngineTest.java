@@ -274,7 +274,7 @@ class MiniLsmEngineTest {
                 new TestRecord("disk:key", sstValue, false)
         ));
 
-        try (MiniLsmEngine engine = new MiniLsmEngine(walPath, List.of(reader))) {
+        try (MiniLsmEngine engine = new MiniLsmEngine(walPath, tempDir, List.of(reader))) {
             ByteBuffer result = engine.get("disk:key");
             assertNotNull(result);
             assertEquals(ByteBuffer.wrap(sstValue), result);
@@ -295,7 +295,7 @@ class MiniLsmEngineTest {
                 new TestRecord("user:1", oldVal, false)
         ));
 
-        try (MiniLsmEngine engine = new MiniLsmEngine(walPath, List.of(reader))) {
+        try (MiniLsmEngine engine = new MiniLsmEngine(walPath, tempDir, List.of(reader))) {
             assertEquals(ByteBuffer.wrap(oldVal), engine.get("user:1"));
 
             engine.put("user:1", newVal);
@@ -314,7 +314,7 @@ class MiniLsmEngineTest {
                 new TestRecord("user:1", oldVal, false)
         ));
 
-        try (MiniLsmEngine engine = new MiniLsmEngine(walPath, List.of(reader))) {
+        try (MiniLsmEngine engine = new MiniLsmEngine(walPath, tempDir, List.of(reader))) {
             assertEquals(ByteBuffer.wrap(oldVal), engine.get("user:1"));
 
             engine.delete("user:1");
@@ -343,7 +343,7 @@ class MiniLsmEngineTest {
                 new TestRecord("k2", null, true)
         ));
 
-        try (MiniLsmEngine engine = new MiniLsmEngine(walPath)) {
+        try (MiniLsmEngine engine = new MiniLsmEngine(walPath, tempDir)) {
             engine.addSSTable(oldReader);
             engine.addSSTable(newReader);
 
@@ -363,7 +363,7 @@ class MiniLsmEngineTest {
                 new TestRecord("k1", "v1".getBytes(StandardCharsets.UTF_8), false)
         ));
 
-        MiniLsmEngine engine = new MiniLsmEngine(walPath, List.of(reader));
+        MiniLsmEngine engine = new MiniLsmEngine(walPath, tempDir, List.of(reader));
         assertNotNull(engine.get("k1"));
 
         engine.close();
