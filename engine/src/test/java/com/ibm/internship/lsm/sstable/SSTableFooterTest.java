@@ -39,7 +39,6 @@ public class SSTableFooterTest {
     void shouldParseValidFooter(@TempDir Path tempDir) throws IOException {
         Path sstPath = tempDir.resolve("valid.sst");
 
-        // 3 valid index entries
         ByteBuffer indexBuf = ByteBuffer.allocate(3 * (4 + 4 + 8 + 4));
         for (int i = 1; i <= 3; i++) {
             byte[] kb = ("key" + i).getBytes(java.nio.charset.StandardCharsets.UTF_8);

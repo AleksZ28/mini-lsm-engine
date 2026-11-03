@@ -9,10 +9,6 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 
-/**
- * In-memory index loaded from the SSTable Index Block.
- * Entries are sorted lexicographically by key, supporting O(log N) binary search.
- */
 public class SSTableIndex {
     private final List<IndexEntry> entries;
 
@@ -20,14 +16,6 @@ public class SSTableIndex {
         this.entries = Collections.unmodifiableList(new ArrayList<>(Objects.requireNonNull(entries, "entries cannot be null")));
     }
 
-    /**
-     * Reads and parses the Index Block from the specified channel using metadata from the footer.
-     *
-     * @param channel Open readable FileChannel
-     * @param footer  Validated SSTableFooter containing indexOffset, indexLength, and entryCount
-     * @return Validated in-memory SSTableIndex
-     * @throws IOException If reading fails or the index block is corrupted
-     */
     public static SSTableIndex read(FileChannel channel, SSTableFooter footer) throws IOException {
         Objects.requireNonNull(channel, "channel cannot be null");
         Objects.requireNonNull(footer, "footer cannot be null");
@@ -50,14 +38,6 @@ public class SSTableIndex {
         return decode(buffer, footer);
     }
 
-    /**
-     * Decodes and validates index entries from a ByteBuffer.
-     *
-     * @param buffer ByteBuffer containing the exact bytes of the Index Block
-     * @param footer SSTableFooter containing index boundary constraints
-     * @return Validated SSTableIndex
-     * @throws IOException If structure, ordering, or boundaries are invalid
-     */
     public static SSTableIndex decode(ByteBuffer buffer, SSTableFooter footer) throws IOException {
         Objects.requireNonNull(buffer, "buffer cannot be null");
         Objects.requireNonNull(footer, "footer cannot be null");
@@ -123,12 +103,6 @@ public class SSTableIndex {
         return new SSTableIndex(entries);
     }
 
-    /**
-     * Performs an O(log N) binary search for the given key.
-     *
-     * @param key Key to find
-     * @return Matching IndexEntry, or null if key does not exist in the index
-     */
     public IndexEntry find(String key) {
         if (key == null || entries.isEmpty()) {
             return null;

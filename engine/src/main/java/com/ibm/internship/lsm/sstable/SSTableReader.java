@@ -1,14 +1,15 @@
 package com.ibm.internship.lsm.sstable;
 
+import com.ibm.internship.lsm.wal.OpType;
+import com.ibm.internship.lsm.wal.WalDecoder;
+
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.Objects;
 
-/**
- * Reader for immutable SSTable files on disk.
- */
 public class SSTableReader implements AutoCloseable {
     private final Path path;
     private final FileChannel channel;
@@ -33,6 +34,59 @@ public class SSTableReader implements AutoCloseable {
 
     public static SSTableReader open(Path path) throws IOException {
         return new SSTableReader(path);
+    }
+
+    public ByteBuffer get(String key) throws IOException {
+        WalDecoder.DecodedRecord record = readRecord(key);
+        if (record == null || record.getOpType() == OpType.DELETE) {
+            return null;
+        }
+
+        return ByteBuffer.wrap(record.getValueBytes()).asReadOnlyBuffer();
+    }
+
+    public WalDecoder.DecodedRecord readRecord(String key) throws IOException {
+        if (key == null) {
+            return null;
+        }
+
+        IndexEntry entry = index.find(key);
+        if (entry == null) {
+            return null;
+        }
+
+        ByteBuffer buffer = ByteBuffer.allocate(entry.recordLength());
+        long readOffset = entry.offset();
+
+        while (buffer.hasRemaining()) {
+            int bytesRead = channel.read(buffer, readOffset);
+            if (bytesRead == -1) {
+                throw new IOException(String.format(
+                        "Unexpected EOF while reading SSTable record for key '%s' at offset %d",
+                        key, readOffset
+                ));
+            }
+            readOffset += bytesRead;
+        }
+
+        buffer.flip();
+        WalDecoder.DecodedRecord record = WalDecoder.decode(buffer);
+
+        if (!key.equals(record.getKey())) {
+            throw new IOException(String.format(
+                    "Corrupted SSTable record: index key '%s' does not match payload key '%s'",
+                    key, record.getKey()
+            ));
+        }
+
+        return record;
+    }
+
+    public boolean containsKey(String key) {
+        if (key == null) {
+            return false;
+        }
+        return index.find(key) != null;
     }
 
     public SSTableFooter getFooter() {

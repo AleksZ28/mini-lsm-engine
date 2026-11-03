@@ -96,7 +96,6 @@ public class SSTableIndexTest {
 
         assertEquals(5, index.size());
 
-        // Find each present key
         for (IndexEntry expected : entries) {
             IndexEntry found = index.find(expected.key());
             assertNotNull(found);
@@ -105,7 +104,6 @@ public class SSTableIndexTest {
             assertEquals(expected.recordLength(), found.recordLength());
         }
 
-        // Test boundary misses
         assertNull(index.find("aardvark"));   // before first
         assertNull(index.find("blueberry"));  // between banana and cherry
         assertNull(index.find("fig"));        // after last
@@ -127,14 +125,12 @@ public class SSTableIndexTest {
     void shouldThrowWhenKeysOutOfOrder() {
         ByteBuffer buf = ByteBuffer.allocate(64);
 
-        // entry 1: "banana"
         byte[] k1 = "banana".getBytes(StandardCharsets.UTF_8);
         buf.putInt(k1.length);
         buf.put(k1);
         buf.putLong(0);
         buf.putInt(15);
 
-        // entry 2: "apple" (out of order!)
         byte[] k2 = "apple".getBytes(StandardCharsets.UTF_8);
         buf.putInt(k2.length);
         buf.put(k2);
@@ -153,14 +149,12 @@ public class SSTableIndexTest {
     void shouldThrowWhenDuplicateKeys() {
         ByteBuffer buf = ByteBuffer.allocate(64);
 
-        // entry 1: "apple"
         byte[] k1 = "apple".getBytes(StandardCharsets.UTF_8);
         buf.putInt(k1.length);
         buf.put(k1);
         buf.putLong(0);
         buf.putInt(15);
 
-        // entry 2: "apple" (duplicate!)
         buf.putInt(k1.length);
         buf.put(k1);
         buf.putLong(15);
@@ -204,7 +198,6 @@ public class SSTableIndexTest {
         IndexEntry entry = new IndexEntry("key1", 0, 15);
         byte[] indexBytes = createIndexBlock(List.of(entry));
 
-        // Add 4 junk trailing bytes
         ByteBuffer buf = ByteBuffer.allocate(indexBytes.length + 4);
         buf.put(indexBytes);
         buf.putInt(0xDEADBEEF);
