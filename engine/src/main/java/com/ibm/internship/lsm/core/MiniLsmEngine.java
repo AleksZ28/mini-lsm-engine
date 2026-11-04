@@ -30,11 +30,11 @@ public class MiniLsmEngine implements StorageEngine {
     private final long flushThresholdBytes;
 
     public MiniLsmEngine(Path walPath, Path sstDir) throws IOException {
-        this(walPath, sstDir, DEFAULT_THRESHOLD_BYTES, Collections.emptyList());
+        this(walPath, sstDir, DEFAULT_THRESHOLD_BYTES, loadSSTables(sstDir));
     }
 
     public MiniLsmEngine(Path walPath, Path sstDir, long thresholdBytes) throws IOException {
-        this(walPath, sstDir, thresholdBytes, Collections.emptyList());
+        this(walPath, sstDir, thresholdBytes, loadSSTables(sstDir));
     }
 
     public MiniLsmEngine(Path walPath, Path sstDir, List<SSTableReader> sstables) throws IOException {
@@ -47,11 +47,7 @@ public class MiniLsmEngine implements StorageEngine {
         }
         this.activeMemTable = new MemTable();
         this.wal = new Wal(walPath);
-        if (sstDir != null && sstDir.getFileName() != null && sstDir.getFileName().toString().endsWith(".sst")) {
-            this.sstDir = sstDir.getParent() != null ? sstDir.getParent() : Path.of(".");
-        } else {
-            this.sstDir = sstDir != null ? sstDir : Path.of(".");
-        }
+        this.sstDir = normalizeDir(sstDir);
         if (!Files.exists(this.sstDir)) {
             Files.createDirectories(this.sstDir);
         }
@@ -154,15 +150,10 @@ public class MiniLsmEngine implements StorageEngine {
 
         try (DirectoryStream<Path> stream = Files.newDirectoryStream(sstDir, "*.sst")) {
             for (Path file : stream) {
-                String fileName = file.getFileName().toString();
-                String nameWithoutExtension = fileName.substring(0, fileName.length() - 4);
-
-                try {
-                    long currentIndex = Long.parseLong(nameWithoutExtension);
-                    if (currentIndex > maxIndex) {
-                        maxIndex = currentIndex;
-                    }
-                } catch (NumberFormatException ignored) {}
+                long currentIndex = parseSstIndex(file);
+                if (currentIndex > maxIndex) {
+                    maxIndex = currentIndex;
+                }
             }
         }
 
@@ -176,6 +167,56 @@ public class MiniLsmEngine implements StorageEngine {
 
     public List<SSTableReader> getSstables() {
         return Collections.unmodifiableList(sstables);
+    }
+
+    private static List<SSTableReader> loadSSTables(Path sstDir) throws IOException {
+        Path dir = normalizeDir(sstDir);
+        if (!Files.exists(dir) || !Files.isDirectory(dir)) {
+            return Collections.emptyList();
+        }
+
+        List<Path> sstFiles = new ArrayList<>();
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(dir, "*.sst")) {
+            for (Path file : stream) {
+                sstFiles.add(file);
+            }
+        }
+
+        sstFiles.sort((p1, p2) -> Long.compare(parseSstIndex(p2), parseSstIndex(p1)));
+
+        List<SSTableReader> readers = new ArrayList<>();
+        try {
+            for (Path file : sstFiles) {
+                readers.add(SSTableReader.open(file));
+            }
+            return readers;
+        } catch (IOException e) {
+            for (SSTableReader reader : readers) {
+                try {
+                    reader.close();
+                } catch (IOException suppressed) {
+                    e.addSuppressed(suppressed);
+                }
+            }
+            throw e;
+        }
+    }
+
+    private static long parseSstIndex(Path file) {
+        String fileName = file.getFileName().toString();
+        if (fileName.endsWith(".sst")) {
+            try {
+                return Long.parseLong(fileName.substring(0, fileName.length() - 4));
+            } catch (NumberFormatException ignored) {}
+        }
+        return -1;
+    }
+
+    private static Path normalizeDir(Path sstDir) {
+        if (sstDir != null && sstDir.getFileName() != null && sstDir.getFileName().toString().endsWith(".sst")) {
+            return sstDir.getParent() != null ? sstDir.getParent() : Path.of(".");
+        }
+        return sstDir != null ? sstDir : Path.of(".");
     }
 
     public long getThresholdBytes() {
