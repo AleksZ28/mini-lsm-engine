@@ -132,4 +132,16 @@ class LsmAppTest {
         assertEquals(200, response.statusCode());
         assertTrue(response.body().contains("MINI-LSM STORAGE ENGINE DASHBOARD"));
     }
+
+    @Test
+    @DisplayName("Should successfully trigger flush over HTTP POST /api/flush")
+    void shouldTriggerFlushOverHttp() throws Exception {
+        HttpRequest flushRequest = HttpRequest.newBuilder()
+                .uri(URI.create(baseUrl + "/api/flush"))
+                .POST(HttpRequest.BodyPublishers.noBody())
+                .build();
+
+        HttpResponse<String> response = httpClient.send(flushRequest, HttpResponse.BodyHandlers.ofString());
+        assertEquals(204, response.statusCode());
+    }
 }

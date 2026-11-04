@@ -49,6 +49,11 @@ public class LsmApp {
             config.routes.post("/api/entries", entryController::createEntry);
             config.routes.get("/api/entries/{key}", entryController::readEntry);
             config.routes.delete("/api/entries/{key}", entryController::deleteEntry);
+
+            config.routes.post("/api/flush", ctx -> {
+                engine.flush();
+                ctx.status(204);
+            });
         });
     }
 
