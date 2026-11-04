@@ -343,7 +343,7 @@ class MiniLsmEngineTest {
                 new TestRecord("k2", null, true)
         ));
 
-        try (MiniLsmEngine engine = new MiniLsmEngine(walPath, tempDir)) {
+        try (MiniLsmEngine engine = new MiniLsmEngine(walPath, tempDir, new ArrayList<>())) {
             engine.addSSTable(oldReader);
             engine.addSSTable(newReader);
 
@@ -369,5 +369,26 @@ class MiniLsmEngineTest {
         engine.close();
 
         assertThrows(IOException.class, () -> reader.get("k1"));
+    }
+
+    @Test
+    @DisplayName("Should read persisted data from SSTables after engine restart without WAL recovery")
+    void shouldLoadSSTablesOnEngineRestart(@TempDir Path tempDir) throws IOException {
+        Path walPath = tempDir.resolve("restart_sst.wal");
+        Path sstDir = tempDir.resolve("sstables");
+
+        try (MiniLsmEngine engine = new MiniLsmEngine(walPath, sstDir)) {
+            engine.put("persisted_key", "persisted_value".getBytes(StandardCharsets.UTF_8));
+            engine.flush();
+        }
+
+        try (MiniLsmEngine engine = new MiniLsmEngine(walPath, sstDir)) {
+            assertEquals(1, engine.getSstables().size(), "Engine should load 1.sst");
+
+            // we don't call recoverFromWal()
+            ByteBuffer val = engine.get("persisted_key");
+            assertNotNull(val, "Key should be present after restart");
+            assertEquals(ByteBuffer.wrap("persisted_value".getBytes(StandardCharsets.UTF_8)), val);
+        }
     }
 }
