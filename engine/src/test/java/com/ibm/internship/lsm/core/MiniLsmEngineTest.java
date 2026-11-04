@@ -370,4 +370,124 @@ class MiniLsmEngineTest {
 
         assertThrows(IOException.class, () -> reader.get("k1"));
     }
+
+    @Test
+    @DisplayName("Should use default threshold bytes when not explicitly specified")
+    void shouldUseDefaultThresholdWhenNotSpecified(@TempDir Path tempDir) throws IOException {
+        Path walPath = tempDir.resolve("engine.wal");
+        Path sstDir = tempDir.resolve("sstables");
+
+        try (MiniLsmEngine engine = new MiniLsmEngine(walPath, sstDir)) {
+            assertEquals(MiniLsmEngine.DEFAULT_THRESHOLD_BYTES, engine.getThresholdBytes());
+        }
+    }
+
+    @Test
+    @DisplayName("Should reject non-positive threshold bytes with IllegalArgumentException")
+    void shouldRejectNonPositiveThresholdBytes(@TempDir Path tempDir) {
+        Path walPath = tempDir.resolve("engine.wal");
+        Path sstDir = tempDir.resolve("sstables");
+
+        assertThrows(IllegalArgumentException.class, () -> new MiniLsmEngine(walPath, sstDir, 0));
+        assertThrows(IllegalArgumentException.class, () -> new MiniLsmEngine(walPath, sstDir, -100));
+        assertThrows(IllegalArgumentException.class, () -> new MiniLsmEngine(walPath, sstDir, 0, List.of()));
+    }
+
+    @Test
+    @DisplayName("Should not trigger flush when writes are below threshold")
+    void shouldNotFlushWhenWritesAreBelowThreshold(@TempDir Path tempDir) throws IOException {
+        Path walPath = tempDir.resolve("engine.wal");
+        Path sstDir = tempDir.resolve("sstables");
+        long threshold = 100; // 100 bytes
+
+        try (MiniLsmEngine engine = new MiniLsmEngine(walPath, sstDir, threshold)) {
+            // Write 10 bytes ("k1" = 2 bytes, "value1234" = 9 bytes -> 11 bytes)
+            engine.put("k1", "value1234".getBytes(StandardCharsets.UTF_8));
+
+            assertTrue(engine.getSstables().isEmpty(), "No SSTables should be created when below threshold");
+            assertTrue(Files.size(walPath) > 0, "WAL must contain unpersisted write");
+            assertEquals(ByteBuffer.wrap("value1234".getBytes(StandardCharsets.UTF_8)), engine.get("k1"));
+        }
+    }
+
+    @Test
+    @DisplayName("Should automatically trigger flush when MemTable byte size reaches 70% threshold")
+    void shouldAutomaticallyFlushWhenMemTableReachesThreshold(@TempDir Path tempDir) throws IOException {
+        Path walPath = tempDir.resolve("engine.wal");
+        Path sstDir = tempDir.resolve("sstables");
+        long threshold = 20; // 20 bytes threshold -> 70% = 14 bytes
+
+        try (MiniLsmEngine engine = new MiniLsmEngine(walPath, sstDir, threshold)) {
+            assertEquals(14, engine.getFlushThresholdBytes());
+
+            // Write 1: "key1" (4) + "val1" (4) = 8 bytes (< 14, no flush)
+            engine.put("key1", "val1".getBytes(StandardCharsets.UTF_8));
+            assertTrue(engine.getSstables().isEmpty());
+            assertTrue(Files.size(walPath) > 0);
+
+            // Write 2: "key2" (4) + "val2" (4) = 8 bytes (total 16 >= 14 -> AUTOMATIC FLUSH!)
+            engine.put("key2", "val2".getBytes(StandardCharsets.UTF_8));
+
+            // Verify flush was automatically triggered
+            assertEquals(1, engine.getSstables().size(), "One SSTable should be created automatically");
+            assertTrue(Files.exists(sstDir.resolve("1.sst")), "1.sst must exist");
+            assertEquals(0, Files.size(walPath), "WAL must be reset to 0 after automatic flush");
+
+            // Write 3: accepts new writes into the refreshed MemTable
+            engine.put("key3", "val3".getBytes(StandardCharsets.UTF_8));
+
+            // Verify all data is intact and accessible
+            assertEquals(ByteBuffer.wrap("val1".getBytes(StandardCharsets.UTF_8)), engine.get("key1"));
+            assertEquals(ByteBuffer.wrap("val2".getBytes(StandardCharsets.UTF_8)), engine.get("key2"));
+            assertEquals(ByteBuffer.wrap("val3".getBytes(StandardCharsets.UTF_8)), engine.get("key3"));
+        }
+    }
+
+    @Test
+    @DisplayName("Should automatically trigger multiple flushes as threshold is repeatedly exceeded")
+    void shouldAutomaticallyFlushMultipleTimes(@TempDir Path tempDir) throws IOException {
+        Path walPath = tempDir.resolve("engine.wal");
+        Path sstDir = tempDir.resolve("sstables");
+        long threshold = 20; // 20 bytes -> 70% = 14 bytes
+
+        try (MiniLsmEngine engine = new MiniLsmEngine(walPath, sstDir, threshold)) {
+            // First batch: 3 writes * 6 bytes = 18 bytes (>= 14 -> flush 1)
+            engine.put("a1", "val1".getBytes(StandardCharsets.UTF_8)); // 6 bytes (< 14)
+            engine.put("a2", "val2".getBytes(StandardCharsets.UTF_8)); // 12 bytes (< 14)
+            engine.put("a3", "val3".getBytes(StandardCharsets.UTF_8)); // 18 bytes (>= 14 -> flush 1)
+            assertEquals(1, engine.getSstables().size());
+            assertTrue(Files.exists(sstDir.resolve("1.sst")));
+
+            // Second batch: 3 writes * 6 bytes = 18 bytes (>= 14 -> flush 2)
+            engine.put("b1", "val1".getBytes(StandardCharsets.UTF_8)); // 6 bytes
+            engine.put("b2", "val2".getBytes(StandardCharsets.UTF_8)); // 12 bytes
+            engine.put("b3", "val3".getBytes(StandardCharsets.UTF_8)); // 18 bytes (>= 14 -> flush 2)
+            assertEquals(2, engine.getSstables().size());
+            assertTrue(Files.exists(sstDir.resolve("2.sst")));
+
+            // Verify all keys from both flushes are readable
+            assertEquals(ByteBuffer.wrap("val1".getBytes(StandardCharsets.UTF_8)), engine.get("a1"));
+            assertEquals(ByteBuffer.wrap("val3".getBytes(StandardCharsets.UTF_8)), engine.get("b3"));
+        }
+    }
+
+    @Test
+    @DisplayName("Should automatically flush on delete when tombstone causes MemTable to reach threshold")
+    void shouldAutomaticallyFlushOnDeleteTombstone(@TempDir Path tempDir) throws IOException {
+        Path walPath = tempDir.resolve("engine.wal");
+        Path sstDir = tempDir.resolve("sstables");
+        long threshold = 25; // 25 bytes -> 70% = 17 bytes
+
+        try (MiniLsmEngine engine = new MiniLsmEngine(walPath, sstDir, threshold)) {
+            engine.put("k1", "v1".getBytes(StandardCharsets.UTF_8)); // 4 bytes (< 17)
+
+            // Delete key with a long name (30 bytes key size -> total 34 >= 17 -> triggers flush)
+            String longDeletedKey = "long_key_name_to_trigger_flush";
+            engine.delete(longDeletedKey);
+
+            assertEquals(1, engine.getSstables().size(), "Delete should trigger automatic flush when threshold exceeded");
+            assertNull(engine.get(longDeletedKey));
+            assertEquals(ByteBuffer.wrap("v1".getBytes(StandardCharsets.UTF_8)), engine.get("k1"));
+        }
+    }
 }
