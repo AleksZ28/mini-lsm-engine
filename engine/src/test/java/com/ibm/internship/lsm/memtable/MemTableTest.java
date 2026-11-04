@@ -128,12 +128,12 @@ class MemTableTest {
 
         // Mutate original array after put
         original[0] = 99;
-        assertEquals(1, memTable.get("k1")[0], "MemTable value must not be affected by modifying original array");
+        assertEquals((byte) 1, memTable.get("k1").get(0), "MemTable value must not be affected by modifying original array");
 
         // Mutate array returned by get
-        byte[] retrieved = memTable.get("k1");
-        retrieved[0] = 77;
-        assertEquals(1, memTable.get("k1")[0], "MemTable value must not be affected by modifying retrieved array");
+        ByteBuffer retrieved = memTable.get("k1");
+        assertThrows(ReadOnlyBufferException.class, () -> retrieved.put(0, (byte) 77));
+        assertEquals((byte) 1, memTable.get("k1").get(0),"MemTable value must not be affected by modifying retrieved array");
     }
 
     @Test
