@@ -144,4 +144,48 @@ class LsmAppTest {
         HttpResponse<String> response = httpClient.send(flushRequest, HttpResponse.BodyHandlers.ofString());
         assertEquals(204, response.statusCode());
     }
+
+    @Test
+    @DisplayName("Should return engine stats over HTTP GET /api/stats")
+    void shouldReturnEngineStatsOverHttp() throws Exception {
+        // 1. Initial empty stats
+        HttpRequest getStatsRequest = HttpRequest.newBuilder()
+                .uri(URI.create(baseUrl + "/api/stats"))
+                .GET()
+                .build();
+
+        HttpResponse<String> initialResponse = httpClient.send(getStatsRequest, HttpResponse.BodyHandlers.ofString());
+        assertEquals(200, initialResponse.statusCode());
+        assertTrue(initialResponse.body().contains("\"memTableSizeBytes\":0"));
+        assertTrue(initialResponse.body().contains("\"memTableEntryCount\":0"));
+        assertTrue(initialResponse.body().contains("\"sstableCount\":0"));
+
+        // 2. Add an entry
+        HttpRequest postRequest = HttpRequest.newBuilder()
+                .uri(URI.create(baseUrl + "/api/entries"))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString("{\"key\": \"user:1\", \"value\": \"Aleks\"}"))
+                .build();
+        assertEquals(201, httpClient.send(postRequest, HttpResponse.BodyHandlers.ofString()).statusCode());
+
+        // 3. Stats after insert -> MemTable has entries and size > 0
+        HttpResponse<String> afterInsertResponse = httpClient.send(getStatsRequest, HttpResponse.BodyHandlers.ofString());
+        assertEquals(200, afterInsertResponse.statusCode());
+        assertTrue(afterInsertResponse.body().contains("\"memTableEntryCount\":1"));
+        assertTrue(afterInsertResponse.body().contains("\"sstableCount\":0"));
+
+        // 4. Trigger flush -> SSTable created, MemTable reset
+        HttpRequest flushRequest = HttpRequest.newBuilder()
+                .uri(URI.create(baseUrl + "/api/flush"))
+                .POST(HttpRequest.BodyPublishers.noBody())
+                .build();
+        assertEquals(204, httpClient.send(flushRequest, HttpResponse.BodyHandlers.ofString()).statusCode());
+
+        // 5. Stats after flush -> sstableCount: 1, memTableEntryCount: 0
+        HttpResponse<String> afterFlushResponse = httpClient.send(getStatsRequest, HttpResponse.BodyHandlers.ofString());
+        assertEquals(200, afterFlushResponse.statusCode());
+        assertTrue(afterFlushResponse.body().contains("\"memTableEntryCount\":0"));
+        assertTrue(afterFlushResponse.body().contains("\"sstableCount\":1"));
+        assertTrue(afterFlushResponse.body().contains("1.sst"));
+    }
 }

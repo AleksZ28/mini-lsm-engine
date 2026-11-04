@@ -193,6 +193,14 @@ public class MiniLsmEngine implements StorageEngine {
         return sstDir != null ? sstDir : Path.of(".");
     }
 
+    public long getMemTableSizeBytes() {
+        return activeMemTable.getBytesSize();
+    }
+
+    public int getMemTableEntryCount() {
+        return activeMemTable.allEntryCount();
+    }
+
     @Override
     public void close() throws IOException {
         IOException exception = null;
