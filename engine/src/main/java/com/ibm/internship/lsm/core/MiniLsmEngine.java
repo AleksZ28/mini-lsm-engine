@@ -219,6 +219,14 @@ public class MiniLsmEngine implements StorageEngine {
         return sstDir != null ? sstDir : Path.of(".");
     }
 
+    public long getMemTableSizeBytes() {
+        return activeMemTable.getBytesSize();
+    }
+
+    public int getMemTableEntryCount() {
+        return activeMemTable.allEntryCount();
+    }
+  
     public long getThresholdBytes() {
         return thresholdBytes;
     }

@@ -2,6 +2,7 @@ package com.ibm.internship.lsm.web;
 
 import com.ibm.internship.lsm.api.StorageEngine;
 import com.ibm.internship.lsm.web.controller.EntryController;
+import com.ibm.internship.lsm.web.controller.StatsController;
 import com.ibm.internship.lsm.web.dto.ErrorResponse;
 import io.javalin.Javalin;
 import io.javalin.http.staticfiles.Location;
@@ -15,6 +16,7 @@ public class LsmApp {
     public LsmApp(StorageEngine engine) {
         this.engine = engine;
         EntryController entryController = new EntryController(engine);
+        StatsController statsController = new StatsController(engine);
 
         this.app = Javalin.create(config -> {
             config.jsonMapper(new JavalinJackson());
@@ -49,6 +51,13 @@ public class LsmApp {
             config.routes.post("/api/entries", entryController::createEntry);
             config.routes.get("/api/entries/{key}", entryController::readEntry);
             config.routes.delete("/api/entries/{key}", entryController::deleteEntry);
+
+            config.routes.post("/api/flush", ctx -> {
+                engine.flush();
+                ctx.status(204);
+            });
+
+            config.routes.get("/api/stats", statsController::getStats);
         });
     }
 
