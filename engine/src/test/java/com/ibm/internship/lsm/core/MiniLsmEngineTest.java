@@ -18,6 +18,11 @@ import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -509,6 +514,130 @@ class MiniLsmEngineTest {
             ByteBuffer val = engine.get("persisted_key");
             assertNotNull(val, "Key should be present after restart");
             assertEquals(ByteBuffer.wrap("persisted_value".getBytes(StandardCharsets.UTF_8)), val);
+        }
+    }
+
+    @Test
+    @DisplayName("Should handle concurrent puts and gets across multiple threads")
+    void shouldHandleConcurrentPutsAndGets(@TempDir Path tempDir) throws Exception {
+        Path walPath = tempDir.resolve("concurrent.wal");
+        Path sstDir = tempDir.resolve("sstables");
+
+        int threadCount = 8;
+        int operationsPerThread = 50;
+
+        try (MiniLsmEngine engine = new MiniLsmEngine(walPath, sstDir)) {
+            ExecutorService executor = Executors.newFixedThreadPool(threadCount);
+            CountDownLatch startLatch = new CountDownLatch(1);
+            CountDownLatch doneLatch = new CountDownLatch(threadCount);
+            AtomicReference<Throwable> failure = new AtomicReference<>();
+
+            for (int t = 0; t < threadCount; t++) {
+                final int threadId = t;
+                executor.submit(() -> {
+                    try {
+                        startLatch.await();
+                        for (int i = 0; i < operationsPerThread; i++) {
+                            String key = "key_" + threadId + "_" + i;
+                            byte[] val = ("val_" + threadId + "_" + i).getBytes(StandardCharsets.UTF_8);
+                            engine.put(key, val);
+
+                            ByteBuffer retrieved = engine.get(key);
+                            assertNotNull(retrieved, "Value should be immediately readable after put");
+                            assertEquals(ByteBuffer.wrap(val), retrieved);
+                        }
+                    } catch (Throwable e) {
+                        failure.compareAndSet(null, e);
+                    } finally {
+                        doneLatch.countDown();
+                    }
+                });
+            }
+
+            startLatch.countDown();
+            assertTrue(doneLatch.await(10, TimeUnit.SECONDS), "Threads should finish within timeout");
+            executor.shutdown();
+            assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS));
+
+            assertNull(failure.get(), "No thread should have encountered an exception");
+
+            for (int t = 0; t < threadCount; t++) {
+                for (int i = 0; i < operationsPerThread; i++) {
+                    String key = "key_" + t + "_" + i;
+                    byte[] expected = ("val_" + t + "_" + i).getBytes(StandardCharsets.UTF_8);
+                    ByteBuffer val = engine.get(key);
+                    assertNotNull(val, "Key should be present: " + key);
+                    assertEquals(ByteBuffer.wrap(expected), val);
+                }
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("Should handle concurrent writes triggering automatic flushes")
+    void shouldHandleConcurrentWritesWithAutomaticFlushes(@TempDir Path tempDir) throws Exception {
+        Path walPath = tempDir.resolve("concurrent_flush.wal");
+        Path sstDir = tempDir.resolve("sstables");
+        long threshold = 100;
+
+        int threadCount = 6;
+        int operationsPerThread = 40;
+
+        try (MiniLsmEngine engine = new MiniLsmEngine(walPath, sstDir, threshold)) {
+            ExecutorService executor = Executors.newFixedThreadPool(threadCount);
+            CountDownLatch startLatch = new CountDownLatch(1);
+            CountDownLatch doneLatch = new CountDownLatch(threadCount);
+            AtomicReference<Throwable> failure = new AtomicReference<>();
+
+            for (int t = 0; t < threadCount; t++) {
+                final int threadId = t;
+                executor.submit(() -> {
+                    try {
+                        startLatch.await();
+                        for (int i = 0; i < operationsPerThread; i++) {
+                            String key = "flush_k_" + threadId + "_" + i;
+                            byte[] val = ("flush_v_" + threadId + "_" + i).getBytes(StandardCharsets.UTF_8);
+                            engine.put(key, val);
+                        }
+                    } catch (Throwable e) {
+                        failure.compareAndSet(null, e);
+                    } finally {
+                        doneLatch.countDown();
+                    }
+                });
+            }
+
+            startLatch.countDown();
+            assertTrue(doneLatch.await(15, TimeUnit.SECONDS), "Threads should finish within timeout");
+            executor.shutdown();
+            assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS));
+
+            assertNull(failure.get(), "No thread should have encountered an exception during concurrent flushes");
+            assertFalse(engine.getSstables().isEmpty(), "Flushes should have produced SSTables");
+
+            for (int t = 0; t < threadCount; t++) {
+                for (int i = 0; i < operationsPerThread; i++) {
+                    String key = "flush_k_" + t + "_" + i;
+                    byte[] expected = ("flush_v_" + t + "_" + i).getBytes(StandardCharsets.UTF_8);
+                    ByteBuffer val = engine.get(key);
+                    assertNotNull(val, "Key must be readable after flushes: " + key);
+                    assertEquals(ByteBuffer.wrap(expected), val);
+                }
+            }
+        }
+
+        // Restart engine and recover from WAL to verify no data loss occurred
+        try (MiniLsmEngine engine = new MiniLsmEngine(walPath, sstDir)) {
+            engine.recoverFromWal();
+            for (int t = 0; t < threadCount; t++) {
+                for (int i = 0; i < operationsPerThread; i++) {
+                    String key = "flush_k_" + t + "_" + i;
+                    byte[] expected = ("flush_v_" + t + "_" + i).getBytes(StandardCharsets.UTF_8);
+                    ByteBuffer val = engine.get(key);
+                    assertNotNull(val, "Key must survive engine restart and recovery: " + key);
+                    assertEquals(ByteBuffer.wrap(expected), val);
+                }
+            }
         }
     }
 }

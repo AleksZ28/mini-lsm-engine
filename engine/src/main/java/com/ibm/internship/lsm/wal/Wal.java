@@ -19,7 +19,7 @@ public class Wal implements AutoCloseable {
         this.logPath = path;
     }
 
-    public void append(String key, byte[] value, boolean isDelete) throws IOException {
+    public synchronized void append(String key, byte[] value, boolean isDelete) throws IOException {
         ByteBuffer buffer = WalEncoder.encode(key, value, isDelete);
 
         while (buffer.hasRemaining()) {
@@ -98,7 +98,7 @@ public class Wal implements AutoCloseable {
         channel.position(channel.size());
     }
 
-    public void reset() throws IOException {
+    public synchronized void reset() throws IOException {
         channel.truncate(0);
         channel.position(0);
     }
@@ -120,7 +120,7 @@ public class Wal implements AutoCloseable {
     }
 
     @Override
-    public void close() throws IOException {
+    public synchronized void close() throws IOException {
         if (channel != null && channel.isOpen()) {
             channel.force(true);
             channel.close();

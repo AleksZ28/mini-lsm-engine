@@ -17,12 +17,17 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 public class MiniLsmEngine implements StorageEngine {
     public static final long DEFAULT_THRESHOLD_BYTES = 32 * 1024 * 1024L;
     public static final double FLUSH_RATIO = 0.7;
 
-    private MemTable activeMemTable;
+    private volatile MemTable activeMemTable;
+    private volatile MemTable immutableMemTable;
+    private final Object flushLock = new Object();
+    private final ReentrantReadWriteLock rwLock = new ReentrantReadWriteLock();
     private final Wal wal;
     private final Path sstDir;
     private final List<SSTableReader> sstables;
@@ -53,7 +58,7 @@ public class MiniLsmEngine implements StorageEngine {
         }
         this.thresholdBytes = thresholdBytes;
         this.flushThresholdBytes = Math.max(1, (long) (thresholdBytes * FLUSH_RATIO));
-        this.sstables = new ArrayList<>(Objects.requireNonNull(sstables, "sstables cannot be null"));
+        this.sstables = new CopyOnWriteArrayList<>(Objects.requireNonNull(sstables, "sstables cannot be null"));
     }
 
     @Override
@@ -65,8 +70,13 @@ public class MiniLsmEngine implements StorageEngine {
             throw new IllegalArgumentException("value cannot be null");
         }
 
-        wal.append(key, value, false);
-        activeMemTable.put(key, value);
+        rwLock.readLock().lock();
+        try {
+            wal.append(key, value, false);
+            activeMemTable.put(key, value);
+        } finally {
+            rwLock.readLock().unlock();
+        }
 
         if (activeMemTable.getBytesSize() >= flushThresholdBytes) {
             flush();
@@ -81,10 +91,15 @@ public class MiniLsmEngine implements StorageEngine {
 
         MemTable.Entry memEntry = activeMemTable.getEntry(key);
         if (memEntry != null) {
-            if (memEntry.isTombstone()) {
-                return null;
+            return memEntry.isTombstone() ? null : memEntry.getValue();
+        }
+
+        MemTable immutable = this.immutableMemTable;
+        if (immutable != null) {
+            MemTable.Entry immEntry = immutable.getEntry(key);
+            if (immEntry != null) {
+                return immEntry.isTombstone() ? null : immEntry.getValue();
             }
-            return memEntry.getValue();
         }
 
         for (SSTableReader sstable : sstables) {
@@ -106,8 +121,13 @@ public class MiniLsmEngine implements StorageEngine {
             throw new IllegalArgumentException("key cannot be null");
         }
 
-        wal.append(key, null, true);
-        activeMemTable.delete(key);
+        rwLock.readLock().lock();
+        try {
+            wal.append(key, null, true);
+            activeMemTable.delete(key);
+        } finally {
+            rwLock.readLock().unlock();
+        }
 
         if (activeMemTable.getBytesSize() >= flushThresholdBytes) {
             flush();
@@ -116,24 +136,33 @@ public class MiniLsmEngine implements StorageEngine {
 
     @Override
     public void flush() throws IOException {
-        if (activeMemTable.isEmpty()) {
-            return;
+        synchronized (flushLock) {
+            if (activeMemTable.isEmpty() && immutableMemTable == null) {
+                return;
+            }
+
+            rwLock.writeLock().lock();
+            try {
+                if (immutableMemTable == null) {
+                    immutableMemTable = activeMemTable;
+                    activeMemTable = new MemTable();
+                }
+
+                long sstIndex = findHighestSstIndex() + 1;
+                Path sstPath = sstDir.resolve(sstIndex + ".sst");
+
+                try (SSTableWriter sstwriter = new SSTableWriter(sstPath)) {
+                    sstwriter.writeFromMemTable(immutableMemTable);
+                    sstwriter.finish();
+                    wal.reset();
+                }
+
+                addSSTable(SSTableReader.open(sstPath));
+                immutableMemTable = null;
+            } finally {
+                rwLock.writeLock().unlock();
+            }
         }
-
-        MemTable memTableToFlush = activeMemTable;
-        activeMemTable = new MemTable();
-
-        long sstIndex = findHighestSstIndex() + 1;
-
-        Path sstPath = sstDir.resolve(sstIndex + ".sst");
-
-        try (SSTableWriter sstwriter = new SSTableWriter(sstPath)) {
-            sstwriter.writeFromMemTable(memTableToFlush);
-            sstwriter.finish();
-            wal.reset();
-        }
-
-        addSSTable(SSTableReader.open(sstPath));
     }
 
     @Override
@@ -220,11 +249,13 @@ public class MiniLsmEngine implements StorageEngine {
     }
 
     public long getMemTableSizeBytes() {
-        return activeMemTable.getBytesSize();
+        MemTable immutable = this.immutableMemTable;
+        return activeMemTable.getBytesSize() + (immutable != null ? immutable.getBytesSize() : 0);
     }
 
     public int getMemTableEntryCount() {
-        return activeMemTable.allEntryCount();
+        MemTable immutable = this.immutableMemTable;
+        return activeMemTable.allEntryCount() + (immutable != null ? immutable.allEntryCount() : 0);
     }
   
     public long getThresholdBytes() {
@@ -237,27 +268,34 @@ public class MiniLsmEngine implements StorageEngine {
 
     @Override
     public void close() throws IOException {
-        IOException exception = null;
-        try {
-            wal.close();
-        } catch (IOException e) {
-            exception = e;
-        }
-
-        for (SSTableReader sstable : sstables) {
+        synchronized (flushLock) {
+            rwLock.writeLock().lock();
             try {
-                sstable.close();
-            } catch (IOException e) {
-                if (exception == null) {
+                IOException exception = null;
+                try {
+                    wal.close();
+                } catch (IOException e) {
                     exception = e;
-                } else {
-                    exception.addSuppressed(e);
                 }
-            }
-        }
 
-        if (exception != null) {
-            throw exception;
+                for (SSTableReader sstable : sstables) {
+                    try {
+                        sstable.close();
+                    } catch (IOException e) {
+                        if (exception == null) {
+                            exception = e;
+                        } else {
+                            exception.addSuppressed(e);
+                        }
+                    }
+                }
+
+                if (exception != null) {
+                    throw exception;
+                }
+            } finally {
+                rwLock.writeLock().unlock();
+            }
         }
     }
 }
