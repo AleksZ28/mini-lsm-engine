@@ -5,11 +5,11 @@ import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.Map;
 import java.util.Set;
-import java.util.TreeMap;
+import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 public class MemTable {
-    private final TreeMap<String, Entry> map = new TreeMap<>();
+    private final ConcurrentSkipListMap<String, Entry> map = new ConcurrentSkipListMap<>();
     private final AtomicLong byteSize = new AtomicLong(0);
 
     public static final class Entry{
@@ -46,12 +46,12 @@ public class MemTable {
     }
 
     private void putEntry(String key, Entry newEntry) {
+        long newEntrySize = calculateEntrySize(key, newEntry);
+
         Entry oldEntry = map.put(key, newEntry);
+        long oldEntrySize = oldEntry == null ? 0 : calculateEntrySize(key, oldEntry);
 
-        long oldSize = oldEntry == null ? 0 : calculateEntrySize(key, oldEntry);
-        long newSize = calculateEntrySize(key,newEntry);
-
-        byteSize.addAndGet(newSize - oldSize);
+        byteSize.addAndGet(newEntrySize - oldEntrySize);
     }
 
     public ByteBuffer get(String key){
@@ -117,7 +117,7 @@ public class MemTable {
     }
 
     public Set<Map.Entry<String,Entry>> entrySet() {
-        TreeMap<String, Entry> snapshot = new TreeMap<>();
+        ConcurrentSkipListMap<String, Entry> snapshot = new ConcurrentSkipListMap<>();
 
         snapshot.putAll(map);
 

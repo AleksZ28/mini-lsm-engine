@@ -18,6 +18,11 @@ import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -428,10 +433,15 @@ class MiniLsmEngineTest {
             // Write 2: "key2" (4) + "val2" (4) = 8 bytes (total 16 >= 14 -> AUTOMATIC FLUSH!)
             engine.put("key2", "val2".getBytes(StandardCharsets.UTF_8));
 
-            // Verify flush was automatically triggered
+            // Immediately after put(), WAL is rotated to 0 and data is readable from immutableMemTable
+            assertEquals(0, Files.size(walPath), "Active WAL must be reset to 0 immediately upon rotation");
+            assertEquals(ByteBuffer.wrap("val1".getBytes(StandardCharsets.UTF_8)), engine.get("key1"));
+            assertEquals(ByteBuffer.wrap("val2".getBytes(StandardCharsets.UTF_8)), engine.get("key2"));
+
+            // Wait for background flush worker to finish writing 1.sst
+            engine.waitForFlush();
             assertEquals(1, engine.getSstables().size(), "One SSTable should be created automatically");
             assertTrue(Files.exists(sstDir.resolve("1.sst")), "1.sst must exist");
-            assertEquals(0, Files.size(walPath), "WAL must be reset to 0 after automatic flush");
 
             // Write 3: accepts new writes into the refreshed MemTable
             engine.put("key3", "val3".getBytes(StandardCharsets.UTF_8));
@@ -455,6 +465,7 @@ class MiniLsmEngineTest {
             engine.put("a1", "val1".getBytes(StandardCharsets.UTF_8)); // 6 bytes (< 14)
             engine.put("a2", "val2".getBytes(StandardCharsets.UTF_8)); // 12 bytes (< 14)
             engine.put("a3", "val3".getBytes(StandardCharsets.UTF_8)); // 18 bytes (>= 14 -> flush 1)
+            engine.waitForFlush();
             assertEquals(1, engine.getSstables().size());
             assertTrue(Files.exists(sstDir.resolve("1.sst")));
 
@@ -462,6 +473,7 @@ class MiniLsmEngineTest {
             engine.put("b1", "val1".getBytes(StandardCharsets.UTF_8)); // 6 bytes
             engine.put("b2", "val2".getBytes(StandardCharsets.UTF_8)); // 12 bytes
             engine.put("b3", "val3".getBytes(StandardCharsets.UTF_8)); // 18 bytes (>= 14 -> flush 2)
+            engine.waitForFlush();
             assertEquals(2, engine.getSstables().size());
             assertTrue(Files.exists(sstDir.resolve("2.sst")));
 
@@ -484,6 +496,7 @@ class MiniLsmEngineTest {
             // Delete key with a long name (30 bytes key size -> total 34 >= 17 -> triggers flush)
             String longDeletedKey = "long_key_name_to_trigger_flush";
             engine.delete(longDeletedKey);
+            engine.waitForFlush();
 
             assertEquals(1, engine.getSstables().size(), "Delete should trigger automatic flush when threshold exceeded");
             assertNull(engine.get(longDeletedKey));
@@ -509,6 +522,162 @@ class MiniLsmEngineTest {
             ByteBuffer val = engine.get("persisted_key");
             assertNotNull(val, "Key should be present after restart");
             assertEquals(ByteBuffer.wrap("persisted_value".getBytes(StandardCharsets.UTF_8)), val);
+        }
+    }
+
+    @Test
+    @DisplayName("Should handle concurrent puts and gets across multiple threads")
+    void shouldHandleConcurrentPutsAndGets(@TempDir Path tempDir) throws Exception {
+        Path walPath = tempDir.resolve("concurrent.wal");
+        Path sstDir = tempDir.resolve("sstables");
+
+        int threadCount = 8;
+        int operationsPerThread = 50;
+
+        try (MiniLsmEngine engine = new MiniLsmEngine(walPath, sstDir)) {
+            ExecutorService executor = Executors.newFixedThreadPool(threadCount);
+            CountDownLatch startLatch = new CountDownLatch(1);
+            CountDownLatch doneLatch = new CountDownLatch(threadCount);
+            AtomicReference<Throwable> failure = new AtomicReference<>();
+
+            for (int t = 0; t < threadCount; t++) {
+                final int threadId = t;
+                executor.submit(() -> {
+                    try {
+                        startLatch.await();
+                        for (int i = 0; i < operationsPerThread; i++) {
+                            String key = "key_" + threadId + "_" + i;
+                            byte[] val = ("val_" + threadId + "_" + i).getBytes(StandardCharsets.UTF_8);
+                            engine.put(key, val);
+
+                            ByteBuffer retrieved = engine.get(key);
+                            assertNotNull(retrieved, "Value should be immediately readable after put");
+                            assertEquals(ByteBuffer.wrap(val), retrieved);
+                        }
+                    } catch (Throwable e) {
+                        failure.compareAndSet(null, e);
+                    } finally {
+                        doneLatch.countDown();
+                    }
+                });
+            }
+
+            startLatch.countDown();
+            assertTrue(doneLatch.await(10, TimeUnit.SECONDS), "Threads should finish within timeout");
+            executor.shutdown();
+            assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS));
+
+            assertNull(failure.get(), "No thread should have encountered an exception");
+
+            for (int t = 0; t < threadCount; t++) {
+                for (int i = 0; i < operationsPerThread; i++) {
+                    String key = "key_" + t + "_" + i;
+                    byte[] expected = ("val_" + t + "_" + i).getBytes(StandardCharsets.UTF_8);
+                    ByteBuffer val = engine.get(key);
+                    assertNotNull(val, "Key should be present: " + key);
+                    assertEquals(ByteBuffer.wrap(expected), val);
+                }
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("Should handle concurrent writes triggering automatic flushes")
+    void shouldHandleConcurrentWritesWithAutomaticFlushes(@TempDir Path tempDir) throws Exception {
+        Path walPath = tempDir.resolve("concurrent_flush.wal");
+        Path sstDir = tempDir.resolve("sstables");
+        long threshold = 100;
+
+        int threadCount = 6;
+        int operationsPerThread = 40;
+
+        try (MiniLsmEngine engine = new MiniLsmEngine(walPath, sstDir, threshold)) {
+            ExecutorService executor = Executors.newFixedThreadPool(threadCount);
+            CountDownLatch startLatch = new CountDownLatch(1);
+            CountDownLatch doneLatch = new CountDownLatch(threadCount);
+            AtomicReference<Throwable> failure = new AtomicReference<>();
+
+            for (int t = 0; t < threadCount; t++) {
+                final int threadId = t;
+                executor.submit(() -> {
+                    try {
+                        startLatch.await();
+                        for (int i = 0; i < operationsPerThread; i++) {
+                            String key = "flush_k_" + threadId + "_" + i;
+                            byte[] val = ("flush_v_" + threadId + "_" + i).getBytes(StandardCharsets.UTF_8);
+                            engine.put(key, val);
+                        }
+                    } catch (Throwable e) {
+                        failure.compareAndSet(null, e);
+                    } finally {
+                        doneLatch.countDown();
+                    }
+                });
+            }
+
+            startLatch.countDown();
+            assertTrue(doneLatch.await(15, TimeUnit.SECONDS), "Threads should finish within timeout");
+            executor.shutdown();
+            assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS));
+
+            assertNull(failure.get(), "No thread should have encountered an exception during concurrent flushes");
+            engine.waitForFlush();
+            assertFalse(engine.getSstables().isEmpty(), "Flushes should have produced SSTables");
+
+            for (int t = 0; t < threadCount; t++) {
+                for (int i = 0; i < operationsPerThread; i++) {
+                    String key = "flush_k_" + t + "_" + i;
+                    byte[] expected = ("flush_v_" + t + "_" + i).getBytes(StandardCharsets.UTF_8);
+                    ByteBuffer val = engine.get(key);
+                    assertNotNull(val, "Key must be readable after flushes: " + key);
+                    assertEquals(ByteBuffer.wrap(expected), val);
+                }
+            }
+        }
+
+        // Restart engine and recover from WAL to verify no data loss occurred
+        try (MiniLsmEngine engine = new MiniLsmEngine(walPath, sstDir)) {
+            engine.recoverFromWal();
+            for (int t = 0; t < threadCount; t++) {
+                for (int i = 0; i < operationsPerThread; i++) {
+                    String key = "flush_k_" + t + "_" + i;
+                    byte[] expected = ("flush_v_" + t + "_" + i).getBytes(StandardCharsets.UTF_8);
+                    ByteBuffer val = engine.get(key);
+                    assertNotNull(val, "Key must survive engine restart and recovery: " + key);
+                    assertEquals(ByteBuffer.wrap(expected), val);
+                }
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("Should recover entries from both flushing WAL and active WAL after mid-flush crash")
+    void shouldRecoverFromFlushingWalAndActiveWal(@TempDir Path tempDir) throws IOException {
+        Path walPath = tempDir.resolve("engine.wal");
+        Path flushingWalPath = tempDir.resolve("engine.wal.flushing");
+        Path sstDir = tempDir.resolve("sstables");
+
+        // Simulate a WAL that was rotated to .flushing before a crash
+        try (com.ibm.internship.lsm.wal.Wal flushingWal = new com.ibm.internship.lsm.wal.Wal(flushingWalPath)) {
+            flushingWal.append("k1", "old_val".getBytes(StandardCharsets.UTF_8), false);
+            flushingWal.append("k2", "flushing_val".getBytes(StandardCharsets.UTF_8), false);
+        }
+
+        // Simulate newer writes in the active WAL that arrived after rotation
+        try (com.ibm.internship.lsm.wal.Wal activeWal = new com.ibm.internship.lsm.wal.Wal(walPath)) {
+            activeWal.append("k1", "updated_val".getBytes(StandardCharsets.UTF_8), false);
+            activeWal.append("k3", "active_val".getBytes(StandardCharsets.UTF_8), false);
+        }
+
+        try (MiniLsmEngine engine = new MiniLsmEngine(walPath, sstDir)) {
+            engine.recoverFromWal();
+
+            assertEquals(ByteBuffer.wrap("updated_val".getBytes(StandardCharsets.UTF_8)), engine.get("k1"),
+                    "Active WAL entry must override older flushing WAL entry");
+            assertEquals(ByteBuffer.wrap("flushing_val".getBytes(StandardCharsets.UTF_8)), engine.get("k2"),
+                    "Flushing WAL entry must be recovered");
+            assertEquals(ByteBuffer.wrap("active_val".getBytes(StandardCharsets.UTF_8)), engine.get("k3"),
+                    "Active WAL entry must be recovered");
         }
     }
 }

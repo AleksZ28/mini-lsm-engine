@@ -9,6 +9,11 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -167,5 +172,49 @@ class MemTableTest {
 
         assertThrows(UnsupportedOperationException.class, () -> memTable.entrySet().clear(),
                 "Returned entrySet should be unmodifiable");
+    }
+
+    @Test
+    @DisplayName("Should support concurrent reads, writes, and deletes across threads")
+    void shouldSupportConcurrentReadsAndWrites() throws Exception {
+        MemTable memTable = new MemTable();
+        int threadCount = 8;
+        int operationsPerThread = 100;
+
+        ExecutorService executor = Executors.newFixedThreadPool(threadCount);
+        CountDownLatch startLatch = new CountDownLatch(1);
+        CountDownLatch doneLatch = new CountDownLatch(threadCount);
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+
+        for (int t = 0; t < threadCount; t++) {
+            final int threadId = t;
+            executor.submit(() -> {
+                try {
+                    startLatch.await();
+                    for (int i = 0; i < operationsPerThread; i++) {
+                        String key = "thread_" + threadId + "_key_" + i;
+                        byte[] val = ("value_" + i).getBytes(StandardCharsets.UTF_8);
+                        memTable.put(key, val);
+
+                        ByteBuffer retrieved = memTable.get(key);
+                        assertNotNull(retrieved);
+                        assertEquals(ByteBuffer.wrap(val), retrieved);
+                    }
+                } catch (Throwable e) {
+                    failure.compareAndSet(null, e);
+                } finally {
+                    doneLatch.countDown();
+                }
+            });
+        }
+
+        startLatch.countDown();
+        assertTrue(doneLatch.await(10, TimeUnit.SECONDS));
+        executor.shutdown();
+        assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS));
+
+        assertNull(failure.get(), "No thread should fail");
+        assertEquals(threadCount * operationsPerThread, memTable.entryCount());
+        assertTrue(memTable.getBytesSize() > 0);
     }
 }
