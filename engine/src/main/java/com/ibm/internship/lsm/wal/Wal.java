@@ -19,7 +19,7 @@ public class Wal implements AutoCloseable {
         this.logPath = path;
     }
 
-    public void append(String key, byte[] value, boolean isDelete) throws IOException {
+    public synchronized void append(String key, byte[] value, boolean isDelete) throws IOException {
         ByteBuffer buffer = WalEncoder.encode(key, value, isDelete);
 
         while (buffer.hasRemaining()) {
@@ -27,7 +27,7 @@ public class Wal implements AutoCloseable {
         }
     }
 
-    public WalDecoder.DecodedRecord readNextRecord() throws IOException {
+    public synchronized WalDecoder.DecodedRecord readNextRecord() throws IOException {
         ByteBuffer headerBuffer = ByteBuffer.allocate(WalEncoder.HEADER_SIZE);
         while (headerBuffer.hasRemaining()) {
             int bytesRead = channel.read(headerBuffer);
@@ -63,7 +63,7 @@ public class Wal implements AutoCloseable {
         return WalDecoder.decode(headerBuffer, payloadBuffer);
     }
 
-    public void recover(MemTable memTable) throws IOException {
+    public synchronized void recover(MemTable memTable) throws IOException {
         Objects.requireNonNull(memTable, "MemTable cannot be null");
         channel.position(0);
 
@@ -98,20 +98,20 @@ public class Wal implements AutoCloseable {
         channel.position(channel.size());
     }
 
-    public void reset() throws IOException {
+    public synchronized void reset() throws IOException {
         channel.truncate(0);
         channel.position(0);
     }
 
-    public long size() throws IOException {
+    public synchronized long size() throws IOException {
         return channel.size();
     }
 
-    public void position(long newPosition) throws IOException {
+    public synchronized void position(long newPosition) throws IOException {
         channel.position(newPosition);
     }
 
-    public long position() throws IOException {
+    public synchronized long position() throws IOException {
         return channel.position();
     }
 
@@ -120,7 +120,7 @@ public class Wal implements AutoCloseable {
     }
 
     @Override
-    public void close() throws IOException {
+    public synchronized void close() throws IOException {
         if (channel != null && channel.isOpen()) {
             channel.force(true);
             channel.close();
