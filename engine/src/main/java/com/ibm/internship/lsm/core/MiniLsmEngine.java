@@ -46,7 +46,7 @@ public class MiniLsmEngine implements StorageEngine {
     private final Path walPath;
     private final Path flushingWalPath;
     private final Path sstDir;
-    private final List<SSTableReader> sstables;
+    private volatile List<SSTableReader> sstables;
     private final long thresholdBytes;
     private final long flushThresholdBytes;
 
@@ -124,7 +124,8 @@ public class MiniLsmEngine implements StorageEngine {
             }
         }
 
-        for (SSTableReader sstable : sstables) {
+        List<SSTableReader> currentSstables = this.sstables;
+        for (SSTableReader sstable : currentSstables) {
             WalDecoder.DecodedRecord record = sstable.readRecord(key);
             if (record != null) {
                 if (record.getOpType() == OpType.DELETE) {
@@ -304,12 +305,14 @@ public class MiniLsmEngine implements StorageEngine {
 
             rwLock.writeLock().lock();
             try {
-                sstables.removeAll(toCompact);
-                sstables.add(compactReader);
-                sstables.sort((r1, r2) -> Long.compare(
+                List<SSTableReader> updatedSstables = new ArrayList<>(this.sstables);
+                updatedSstables.removeAll(toCompact);
+                updatedSstables.add(compactReader);
+                updatedSstables.sort((r1, r2) -> Long.compare(
                         parseSstIndex(r2.getPath()),
                         parseSstIndex(r1.getPath())
                 ));
+                this.sstables = new CopyOnWriteArrayList<>(updatedSstables);
             } finally {
                 rwLock.writeLock().unlock();
             }
@@ -344,7 +347,12 @@ public class MiniLsmEngine implements StorageEngine {
 
     public void addSSTable(SSTableReader sstable) {
         Objects.requireNonNull(sstable, "sstable cannot be null");
-        sstables.addFirst(sstable);
+        rwLock.writeLock().lock();
+        try {
+            sstables.addFirst(sstable);
+        } finally {
+            rwLock.writeLock().unlock();
+        }
     }
 
     public List<SSTableReader> getSstables() {
@@ -438,22 +446,12 @@ public class MiniLsmEngine implements StorageEngine {
             Thread.currentThread().interrupt();
         }
 
-        synchronized (flushLock) {
-            rwLock.writeLock().lock();
-            try {
+        synchronized (compactionLock) {
+            synchronized (flushLock) {
+                rwLock.writeLock().lock();
                 try {
-                    wal.close();
-                } catch (IOException e) {
-                    if (exception == null) {
-                        exception = e;
-                    } else {
-                        exception.addSuppressed(e);
-                    }
-                }
-
-                for (SSTableReader sstable : sstables) {
                     try {
-                        sstable.close();
+                        wal.close();
                     } catch (IOException e) {
                         if (exception == null) {
                             exception = e;
@@ -461,9 +459,21 @@ public class MiniLsmEngine implements StorageEngine {
                             exception.addSuppressed(e);
                         }
                     }
+
+                    for (SSTableReader sstable : sstables) {
+                        try {
+                            sstable.close();
+                        } catch (IOException e) {
+                            if (exception == null) {
+                                exception = e;
+                            } else {
+                                exception.addSuppressed(e);
+                            }
+                        }
+                    }
+                } finally {
+                    rwLock.writeLock().unlock();
                 }
-            } finally {
-                rwLock.writeLock().unlock();
             }
         }
 

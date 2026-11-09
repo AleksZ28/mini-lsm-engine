@@ -774,4 +774,55 @@ class MiniLsmEngineTest {
             assertEquals(ByteBuffer.wrap("v1".getBytes(StandardCharsets.UTF_8)), engine.get("k1"));
         }
     }
+
+    @Test
+    @DisplayName("Should maintain consistent reads without missing data during concurrent compaction")
+    void shouldSupportConcurrentReadsDuringCompaction(@TempDir Path tempDir) throws Exception {
+        Path walPath = tempDir.resolve("engine.wal");
+        Path sstDir = tempDir.resolve("sstables");
+
+        try (MiniLsmEngine engine = new MiniLsmEngine(walPath, sstDir)) {
+            // Seed multiple SSTables
+            for (int table = 0; table < 3; table++) {
+                for (int i = 0; i < 20; i++) {
+                    engine.put("key_" + i, ("val_" + table + "_" + i).getBytes(StandardCharsets.UTF_8));
+                }
+                engine.flush();
+            }
+            assertEquals(3, engine.getSstables().size());
+
+            int readers = 4;
+            ExecutorService executor = Executors.newFixedThreadPool(readers);
+            CountDownLatch startLatch = new CountDownLatch(1);
+            java.util.concurrent.atomic.AtomicBoolean running = new java.util.concurrent.atomic.AtomicBoolean(true);
+            AtomicReference<Throwable> failure = new AtomicReference<>();
+
+            for (int r = 0; r < readers; r++) {
+                executor.submit(() -> {
+                    try {
+                        startLatch.await();
+                        while (running.get()) {
+                            for (int i = 0; i < 20; i++) {
+                                ByteBuffer val = engine.get("key_" + i);
+                                assertNotNull(val, "Key key_" + i + " must never return null during compaction");
+                            }
+                        }
+                    } catch (Throwable t) {
+                        failure.compareAndSet(null, t);
+                    }
+                });
+            }
+
+            startLatch.countDown();
+            // Perform compaction concurrently while readers are reading
+            engine.compact();
+            running.set(false);
+
+            executor.shutdown();
+            assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS));
+
+            assertNull(failure.get(), "No reader should fail or observe missing data during compaction");
+            assertEquals(1, engine.getSstables().size(), "Tables must be compacted into 1");
+        }
+    }
 }
