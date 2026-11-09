@@ -39,6 +39,16 @@ public class SSTableWriter implements AutoCloseable {
         indexEntryList.add(new IndexEntry(key, offset, recordLength));
     }
 
+    public void append(SSTableEntry entry) throws IOException {
+        byte[] valueBytes = null;
+        if (entry.value() != null && !entry.isTombstone()) {
+            ByteBuffer valueBuffer = entry.value().duplicate();
+            valueBytes = new byte[valueBuffer.remaining()];
+            valueBuffer.get(valueBytes);
+        }
+        this.append(entry.key(), valueBytes, entry.isTombstone());
+    }
+
     public void finish() throws IOException {
         long indexOffset = currentOffset;
 
