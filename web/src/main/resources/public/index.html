@@ -30,131 +30,197 @@
     </div>
   </nav>
 
-  <main class="max-w-4xl w-full mx-auto p-4 sm:p-6 flex flex-col gap-6 flex-1">
+  <div class="w-full max-w-7xl mx-auto flex">
 
-    <div class="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
-      <div class="bg-slate-50/80 border-b border-slate-200 px-5 py-3">
-        <h2 class="text-sm font-semibold text-slate-800">Playground / Operations</h2>
+    <aside class="w-full lg:w-80 shrink-0 p-4 sm:p-6 flex-col gap-6 hidden lg:flex">
+      <div class="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+        
+        <div class="bg-slate-50/80 border-b border-slate-200 px-5 py-3 flex items-center justify-between">
+          <h2 class="text-sm font-semibold text-slate-800">Stats</h2>
+        </div>
+
+        <div class="p-5 space-y-4">
+
+          <div class="p-3.5 rounded-lg bg-slate-50 border border-slate-200 flex flex-col gap-2">
+            <p class="text-xs font-semibold text-slate-600 uppercase tracking-wider">MemTable (RAM)</p>
+            
+            <div class="flex items-baseline justify-between pt-1">
+              <span class="text-xs text-slate-500">Size in memory:</span>
+              <span id="statMemTableSize" class="text-sm font-bold font-mono text-slate-800">0 B</span>
+            </div>
+            
+            <div class="flex items-baseline justify-between">
+              <span class="text-xs text-slate-500">Entry count:</span>
+              <span id="statMemTableEntries" class="text-sm font-semibold font-mono text-slate-700">0</span>
+            </div>
+          </div>
+
+          <div class="p-3.5 rounded-lg bg-slate-50 border border-slate-200 flex flex-col gap-2">
+            <div class="flex items-center justify-between">
+              <p class="text-xs font-semibold text-slate-600 uppercase tracking-wider">SSTables (Disk)</p>
+              <span id="statSstableCountBadge" class="text-[10px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-800 font-semibold border border-blue-200">
+                <span id="statSstableCount">0</span> files
+              </span>
+            </div>
+          </div>
+
+          <div class="pt-1">
+            <div class="flex items-center justify-between text-xs font-semibold text-slate-700 uppercase tracking-wider mb-2">
+              <span>SSTable Files</span>
+              <span class="text-[10px] font-normal text-slate-400 lowercase"></span>
+            </div>
+
+            <div id="sstableListContainer" class="bg-slate-50 border border-slate-200 rounded-lg p-2.5 min-h-[90px] max-h-52 overflow-y-auto">
+              <div id="sstableEmptyState" class="h-16 flex flex-col items-center justify-center text-slate-400 text-xs">
+                <p>No SSTables on disk</p>
+              </div>
+
+              <ul id="sstableList" class="space-y-1.5 hidden">
+              </ul>
+            </div>
+          </div>
+
+        </div>
       </div>
 
-      <div class="p-5 space-y-4">
-        <div>
-          <label for="keyInput" class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Key</label>
-          <input
-            id="keyInput"
-            type="text"
-            placeholder="e.g. key_1"
-            class="w-full bg-white border border-slate-300 rounded-lg px-3 py-2 text-sm font-mono text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 transition shadow-sm"
-            autocomplete="off"
-            spellcheck="false"
-          />
+    </aside>
+    
+    <main class="max-w-4xl w-full mx-auto p-4 sm:p-6 flex flex-col gap-6 flex-1">
+      <div class="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+        <div class="bg-slate-50/80 border-b border-slate-200 px-5 py-3">
+          <h2 class="text-sm font-semibold text-slate-800">Playground / Operations</h2>
         </div>
 
-        <div>
-          <label for="valueInput" class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Value</label>
-          <textarea
-            id="valueInput"
-            rows="3"
-            placeholder='e.g. {"name": "sample", "count": 10}'
-            class="w-full bg-white border border-slate-300 rounded-lg px-3 py-2 text-sm font-mono text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 transition shadow-sm resize-y"
-            autocomplete="off"
-            spellcheck="false"
-          ></textarea>
-        </div>
+        <div class="p-5 space-y-4">
+          <div>
+            <label for="keyInput" class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Key</label>
+            <input
+              id="keyInput"
+              type="text"
+              placeholder="e.g. key_1"
+              class="w-full bg-white border border-slate-300 rounded-lg px-3 py-2 text-sm font-mono text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 transition shadow-sm"
+              autocomplete="off"
+              spellcheck="false"
+            />
+          </div>
 
-        <div class="flex items-center gap-2 pt-1">
-          <button
-            id="btnPut"
-            class="px-4 py-2 rounded-md bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-medium text-xs tracking-wide transition shadow-sm"
-          >
-            PUT
-          </button>
-          <button
-            id="btnGet"
-            class="px-4 py-2 rounded-md bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-medium text-xs tracking-wide transition shadow-sm"
-          >
-            GET
-          </button>
-          <button
-            id="btnDelete"
-            class="px-4 py-2 rounded-md bg-rose-600 hover:bg-rose-700 active:bg-rose-800 text-white font-medium text-xs tracking-wide transition shadow-sm"
-          >
-            DELETE
-          </button>
-        </div>
+          <div>
+            <label for="valueInput" class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Value</label>
+            <textarea
+              id="valueInput"
+              rows="3"
+              placeholder='e.g. {"name": "sample", "count": 10}'
+              class="w-full bg-white border border-slate-300 rounded-lg px-3 py-2 text-sm font-mono text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 transition shadow-sm resize-y"
+              autocomplete="off"
+              spellcheck="false"
+            ></textarea>
+          </div>
 
-        <div class="pt-2">
-          <div class="text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Output / Result</div>
-          <div class="bg-slate-50 border border-slate-200 rounded-lg p-3 min-h-[56px] flex items-center">
-            <div id="resultBox" class="w-full">
-              <span class="text-xs text-slate-500">No operations executed yet.</span>
+          <div class="flex items-center gap-2 pt-1">
+            <button
+              id="btnPut"
+              class="px-4 py-2 rounded-md bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-medium text-xs tracking-wide transition shadow-sm"
+            >
+              PUT
+            </button>
+            <button
+              id="btnGet"
+              class="px-4 py-2 rounded-md bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-medium text-xs tracking-wide transition shadow-sm"
+            >
+              GET
+            </button>
+            <button
+              id="btnDelete"
+              class="px-4 py-2 rounded-md bg-rose-600 hover:bg-rose-700 active:bg-rose-800 text-white font-medium text-xs tracking-wide transition shadow-sm"
+            >
+              DELETE
+            </button>
+          </div>
+
+          <div class="pt-2">
+            <div class="text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Output / Result</div>
+            <div class="bg-slate-50 border border-slate-200 rounded-lg p-3 min-h-[56px] flex items-center">
+              <div id="resultBox" class="w-full">
+                <span class="text-xs text-slate-500">No operations executed yet.</span>
+              </div>
             </div>
           </div>
         </div>
       </div>
-    </div>
 
-    <div class="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
-      <div class="bg-slate-50/80 border-b border-slate-200 px-5 py-3">
-        <h2 class="text-sm font-semibold text-slate-800">Quick Actions / Benchmark</h2>
+      <div class="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+        <div class="bg-slate-50/80 border-b border-slate-200 px-5 py-3">
+          <h2 class="text-sm font-semibold text-slate-800">Quick Actions / Benchmark</h2>
+        </div>
+
+        <div class="p-5 flex flex-wrap flex-col items-start gap-3">
+          <div class="flex items-center gap-2">
+            <button
+              id="btnInsertRandom"
+              class="px-4 py-2 rounded-md bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white font-medium text-xs tracking-wide transition shadow-sm"
+            >
+              Insert Random Keys
+            </button>
+            <div class="flex items-center bg-white border border-slate-300 rounded-md px-2.5 py-1.5 shadow-sm">
+              <span class="text-xs text-slate-500 mr-1.5 select-none">Count:</span>
+              <input
+                id="randomKeyCount"
+                type="number"
+                min="1"
+                max="500"
+                value="10"
+                class="w-12 bg-transparent text-center text-xs font-mono text-slate-800 outline-none font-semibold"
+              />
+            </div>
+          </div>
+
+          <div class="flex gap-2">
+            <button
+                    id="btnCompact"
+                    class="px-4 py-2 rounded-md bg-white hover:bg-slate-50 active:bg-slate-100 text-slate-700 border border-slate-300 font-medium text-xs tracking-wide transition shadow-sm"
+            >
+              Trigger Manual Compaction
+            </button>
+
+            <button
+                    onclick="triggerFlush()"
+                    id="btnFlush"
+                    class="px-4 py-2 rounded-md bg-white hover:bg-slate-50 active:bg-slate-100 text-slate-700 border border-slate-300 font-medium text-xs tracking-wide transition shadow-sm"
+            >
+              Trigger Manual Flush
+            </button>
+          </div>
+        </div>
       </div>
 
-      <div class="p-5 flex flex-wrap flex-col items-start gap-3">
-        <div class="flex items-center gap-2">
+      <div class="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+        <div class="bg-slate-50/80 border-b border-slate-200 px-5 py-3 flex items-center justify-between">
+          <h2 class="text-sm font-semibold text-slate-800">Engine Activity Log</h2>
           <button
-            id="btnInsertRandom"
-            class="px-4 py-2 rounded-md bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white font-medium text-xs tracking-wide transition shadow-sm"
+            id="btnClearLog"
+            class="text-xs text-slate-500 hover:text-slate-800 underline font-mono cursor-pointer"
           >
-            Insert Random Keys
+            Clear Log
           </button>
-          <div class="flex items-center bg-white border border-slate-300 rounded-md px-2.5 py-1.5 shadow-sm">
-            <span class="text-xs text-slate-500 mr-1.5 select-none">Count:</span>
-            <input
-              id="randomKeyCount"
-              type="number"
-              min="1"
-              max="500"
-              value="10"
-              class="w-12 bg-transparent text-center text-xs font-mono text-slate-800 outline-none font-semibold"
-            />
-          </div>
         </div>
 
-        <button
-          id="btnCompact"
-          class="px-4 py-2 rounded-md bg-white hover:bg-slate-50 active:bg-slate-100 text-slate-700 border border-slate-300 font-medium text-xs tracking-wide transition shadow-sm"
-        >
-          Trigger Manual Compaction
-        </button>
-      </div>
-    </div>
-
-    <div class="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
-      <div class="bg-slate-50/80 border-b border-slate-200 px-5 py-3 flex items-center justify-between">
-        <h2 class="text-sm font-semibold text-slate-800">Engine Activity Log</h2>
-        <button
-          id="btnClearLog"
-          class="text-xs text-slate-500 hover:text-slate-800 underline font-mono cursor-pointer"
-        >
-          Clear Log
-        </button>
-      </div>
-
-      <div class="p-5">
-        <div
-          id="activityLog"
-          class="h-44 overflow-y-auto font-mono text-xs p-3.5 bg-slate-900 border border-slate-800 rounded-lg space-y-1 text-slate-200 select-text"
-        >
-          <div class="flex items-start gap-2.5 py-1 text-xs font-mono">
-            <span class="text-slate-500 select-none">SYSTEM</span>
-            <span class="px-1.5 py-0.2 rounded border text-[10px] font-semibold bg-sky-500/20 text-sky-300 border-sky-500/40">INFO</span>
-            <span class="text-slate-300">Ready for operations</span>
+        <div class="p-5">
+          <div
+            id="activityLog"
+            class="h-44 overflow-y-auto font-mono text-xs p-3.5 bg-slate-900 border border-slate-800 rounded-lg space-y-1 text-slate-200 select-text"
+          >
+            <div class="flex items-start gap-2.5 py-1 text-xs font-mono">
+              <span class="text-slate-500 select-none">SYSTEM</span>
+              <span class="px-1.5 py-0.2 rounded border text-[10px] font-semibold bg-sky-500/20 text-sky-300 border-sky-500/40">INFO</span>
+              <span class="text-slate-300">Ready for operations</span>
+            </div>
           </div>
         </div>
       </div>
-    </div>
 
-  </main>
+    </main>
+
+  </div>
 
   <script src="app.js"></script>
 </body>
