@@ -69,6 +69,7 @@ function addActivityLog(type, message) {
   if (type === "PUT") badgeColor = "bg-emerald-500/20 text-emerald-300 border-emerald-500/40";
   else if (type === "GET") badgeColor = "bg-blue-500/20 text-blue-300 border-blue-500/40";
   else if (type === "DELETE") badgeColor = "bg-rose-500/20 text-rose-300 border-rose-500/40";
+  else if (type === "FLUSH") badgeColor = "bg-cyan-500/20 text-cyan-300 border-cyan-500/40 font-bold";
   else if (type === "BENCHMARK") badgeColor = "bg-purple-500/20 text-purple-300 border-purple-500/40";
   else if (type === "INFO") badgeColor = "bg-amber-500/20 text-amber-300 border-amber-500/40";
   else if (type === "ERROR") badgeColor = "bg-red-500/30 text-red-300 border-red-500/50 font-bold";
@@ -167,7 +168,8 @@ async function handlePut() {
         latencyMs: latency,
         value: value
       });
-      addActivityLog("PUT", `key=${key} -> Persisted to storage engine`);
+      addActivityLog("PUT", `key=${key} -> Persisted to storage engine`); // PUT persisted -> updateStats
+      updateStats();
     } else {
       const errText = await response.text();
       updateResultBox({
@@ -347,7 +349,8 @@ async function handleInsertRandomKeys() {
     foundIn: "Storage Engine",
     latencyMs: totalDuration,
     value: `Inserted ${successCount} random keys successfully.`
-  });
+  }); // BATCH completed -> updateStats
+  updateStats();
 
   if (insertBtn) {
     insertBtn.disabled = false;
@@ -384,7 +387,7 @@ async function checkEngineStatus() {
   }
 }
 
-document.addEventListener("DOMContentLoaded", () => {
+document.addEventListener("DOMContentLoaded", async () => {
   document.getElementById("btnPut")?.addEventListener("click", handlePut);
   document.getElementById("btnGet")?.addEventListener("click", handleGet);
   document.getElementById("btnDelete")?.addEventListener("click", handleDelete);
@@ -394,4 +397,87 @@ document.addEventListener("DOMContentLoaded", () => {
 
   checkEngineStatus();
   setInterval(checkEngineStatus, 10000);
+  await updateStats();
+  setInterval(updateStats, 3000)
 });
+
+function formatBytes(bytes) {
+  if (!bytes || bytes <= 0) return "0 B";
+  const sizes = ["B", "KB", "MB", "GB"];
+  const i = Math.floor(Math.log(bytes) / Math.log(1024));
+  return `${parseFloat((bytes / Math.pow(1024, i)).toFixed(2))} ${sizes[i]}`;
+}
+
+async function updateStats() {
+  try {
+    const res = await fetch("/api/stats");
+    if (!res.ok) return;
+    const stats = await res.json();
+
+    const memTableSizeEl = document.querySelector("#statMemTableSize");
+    const memTableEntriesEl = document.querySelector("#statMemTableEntries");
+    const sstableCountEl = document.querySelector("#statSstableCount");
+    const sstableListEl = document.querySelector("#sstableList");
+    const sstableEmptyState = document.querySelector("#sstableEmptyState");
+
+    if (memTableSizeEl) memTableSizeEl.textContent = formatBytes(stats.memTableSizeBytes);
+    if (memTableEntriesEl) memTableEntriesEl.textContent = `${stats.memTableEntryCount}`;
+    if (sstableCountEl) sstableCountEl.textContent = `${stats.sstableCount}`;
+
+    if (sstableListEl && sstableEmptyState) {
+      const sstables = Array.isArray(stats.sstables) ? stats.sstables : [];
+
+      if (sstables.length === 0) {
+        sstableEmptyState.classList.remove("hidden");
+        sstableListEl.classList.add("hidden");
+        sstableListEl.innerHTML = "";
+      } else {
+        sstableEmptyState.classList.add("hidden");
+        sstableListEl.classList.remove("hidden");
+
+        sstableListEl.innerHTML = sstables.map(sstable => `
+          <li class="flex items-center justify-between px-2.5 py-1.5 rounded-md bg-white border border-slate-200 shadow-xs text-xs font-mono font-medium text-slate-800 truncate">
+              ${escapeHtml(sstable)}
+          </li>
+        `).join("");
+      }
+    }
+  } catch (err) {
+    console.error("Failed to update stats:", err);
+  }
+}
+
+async function triggerFlush() {
+  const flushBtn = document.getElementById("btnFlush");
+  if (flushBtn) {
+    flushBtn.disabled = true;
+    flushBtn.classList.add("opacity-50", "cursor-not-allowed");
+  }
+
+  const start = performance.now();
+  addActivityLog("FLUSH", "Triggering manual MemTable flush to SSTable...");
+
+  try {
+    const res = await fetch("/api/flush", { method: "POST" });
+    const duration = (performance.now() - start).toFixed(1);
+
+    if (res.ok) {
+      addActivityLog("FLUSH", `MemTable flushed to SSTable successfully [${duration} ms]`);
+      showNotification("MemTable flushed to SSTable successfully", "info");
+      await updateStats();
+    } else {
+      const errText = await res.text();
+      addActivityLog("ERROR", `Flush failed (${res.status}): ${errText}`);
+      showNotification(`Flush failed: ${errText}`, "error");
+    }
+  } catch (err) {
+    addActivityLog("ERROR", `Flush error: ${err.message}`);
+    showNotification(`Flush error: ${err.message}`, "error");
+  } finally {
+    if (flushBtn) {
+      flushBtn.disabled = false;
+      flushBtn.classList.remove("opacity-50", "cursor-not-allowed");
+    }
+  }
+}
+
