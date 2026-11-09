@@ -7,6 +7,7 @@ import com.ibm.internship.lsm.sstable.SSTableWriter;
 import com.ibm.internship.lsm.wal.OpType;
 import com.ibm.internship.lsm.wal.Wal;
 import com.ibm.internship.lsm.wal.WalDecoder;
+import com.ibm.internship.lsm.compaction.Compactor;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -30,8 +31,10 @@ public class MiniLsmEngine implements StorageEngine {
 
     private volatile MemTable activeMemTable;
     private volatile MemTable immutableMemTable;
+    private final Compactor compactor = new Compactor();
     private final Object flushLock = new Object();
     private final Object walLock = new Object();
+    private final Object compactionLock = new Object();
     private final ReentrantReadWriteLock rwLock = new ReentrantReadWriteLock();
     private final ExecutorService flushExecutor = Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "lsm-flush-worker");
@@ -280,6 +283,43 @@ public class MiniLsmEngine implements StorageEngine {
             wal.recover(activeMemTable);
         } finally {
             rwLock.writeLock().unlock();
+        }
+    }
+
+    @Override
+    public void compact() throws IOException {
+        synchronized (compactionLock) {
+            waitForFlush();
+
+            if(sstables.size() < 2) {
+                return;
+            }
+
+            List<SSTableReader> toCompact = new ArrayList<>(sstables);
+
+            long newIndex = findHighestSstIndex() + 1;
+            Path compactedPath = sstDir.resolve(newIndex + ".sst");
+
+            SSTableReader compactReader = compactor.compact(toCompact, compactedPath);
+
+            rwLock.writeLock().lock();
+            try {
+                sstables.removeAll(toCompact);
+                sstables.add(compactReader);
+                sstables.sort((r1, r2) -> Long.compare(
+                        parseSstIndex(r2.getPath()),
+                        parseSstIndex(r1.getPath())
+                ));
+            } finally {
+                rwLock.writeLock().unlock();
+            }
+
+            for (SSTableReader oldReader : toCompact) {
+                try {
+                    oldReader.close();
+                } catch (IOException ignored) {}
+                Files.deleteIfExists(oldReader.getPath());
+            }
         }
     }
 

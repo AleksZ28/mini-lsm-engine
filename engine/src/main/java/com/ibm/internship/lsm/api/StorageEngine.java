@@ -10,6 +10,7 @@ public interface StorageEngine extends Closeable {
     void delete(String key) throws IOException;
     void flush() throws IOException;
     void recoverFromWal() throws IOException;
+    void compact() throws IOException;
 
     @Override
     void close() throws IOException;

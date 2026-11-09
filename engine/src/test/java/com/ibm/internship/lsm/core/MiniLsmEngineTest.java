@@ -680,4 +680,98 @@ class MiniLsmEngineTest {
                     "Active WAL entry must be recovered");
         }
     }
+
+    @Test
+    @DisplayName("Should compact multiple SSTables into a single SSTable and reclaim space")
+    void shouldCompactMultipleSSTablesIntoSingleTable(@TempDir Path tempDir) throws IOException {
+        Path walPath = tempDir.resolve("engine.wal");
+        Path sstDir = tempDir.resolve("sstables");
+
+        try (MiniLsmEngine engine = new MiniLsmEngine(walPath, sstDir)) {
+            // First batch -> 1.sst
+            engine.put("k1", "v1".getBytes(StandardCharsets.UTF_8));
+            engine.put("k2", "v2_old".getBytes(StandardCharsets.UTF_8));
+            engine.flush();
+            assertEquals(1, engine.getSstables().size());
+            Path firstSst = sstDir.resolve("1.sst");
+            assertTrue(Files.exists(firstSst));
+
+            // Second batch -> 2.sst (k2 is updated, k3 is new)
+            engine.put("k2", "v2_new".getBytes(StandardCharsets.UTF_8));
+            engine.put("k3", "v3".getBytes(StandardCharsets.UTF_8));
+            engine.flush();
+            assertEquals(2, engine.getSstables().size());
+            Path secondSst = sstDir.resolve("2.sst");
+            assertTrue(Files.exists(secondSst));
+
+            // Execute Compaction
+            engine.compact();
+
+            // Verify: 2 SSTables merged into 1 (named 3.sst)
+            assertEquals(1, engine.getSstables().size(), "Only the single compacted SSTable should remain");
+            Path compactedSst = sstDir.resolve("3.sst");
+            assertTrue(Files.exists(compactedSst), "Compacted 3.sst must exist");
+
+            // Verify: Old SSTables must be deleted from disk
+            assertFalse(Files.exists(firstSst), "1.sst must be deleted after compaction");
+            assertFalse(Files.exists(secondSst), "2.sst must be deleted after compaction");
+
+            // Verify: Data integrity and latest value precedence
+            assertEquals(ByteBuffer.wrap("v1".getBytes(StandardCharsets.UTF_8)), engine.get("k1"));
+            assertEquals(ByteBuffer.wrap("v2_new".getBytes(StandardCharsets.UTF_8)), engine.get("k2"), "Newer value must win");
+            assertEquals(ByteBuffer.wrap("v3".getBytes(StandardCharsets.UTF_8)), engine.get("k3"));
+        }
+    }
+
+    @Test
+    @DisplayName("Should permanently purge tombstones during compaction")
+    void shouldPurgeTombstonesDuringCompaction(@TempDir Path tempDir) throws IOException {
+        Path walPath = tempDir.resolve("engine.wal");
+        Path sstDir = tempDir.resolve("sstables");
+
+        try (MiniLsmEngine engine = new MiniLsmEngine(walPath, sstDir)) {
+            // 1.sst: k1 and k2
+            engine.put("k1", "val1".getBytes(StandardCharsets.UTF_8));
+            engine.put("k2", "val2".getBytes(StandardCharsets.UTF_8));
+            engine.flush();
+
+            // 2.sst: delete k1, add k3
+            engine.delete("k1");
+            engine.put("k3", "val3".getBytes(StandardCharsets.UTF_8));
+            engine.flush();
+
+            // Compact
+            engine.compact();
+
+            // Verify: k1 is gone and returns null
+            assertNull(engine.get("k1"), "Deleted key must return null");
+            assertEquals(ByteBuffer.wrap("val2".getBytes(StandardCharsets.UTF_8)), engine.get("k2"));
+            assertEquals(ByteBuffer.wrap("val3".getBytes(StandardCharsets.UTF_8)), engine.get("k3"));
+
+            // Verify the compacted SSTable only has 2 active entries (k1 was completely dropped)
+            assertEquals(2, engine.getSstables().getFirst().getFooter().entryCount());
+        }
+    }
+
+    @Test
+    @DisplayName("Should safely do nothing if fewer than 2 SSTables exist")
+    void shouldDoNothingWhenFewerThanTwoSSTables(@TempDir Path tempDir) throws IOException {
+        Path walPath = tempDir.resolve("engine.wal");
+        Path sstDir = tempDir.resolve("sstables");
+
+        try (MiniLsmEngine engine = new MiniLsmEngine(walPath, sstDir)) {
+            // 0 tables
+            assertDoesNotThrow(engine::compact);
+            assertTrue(engine.getSstables().isEmpty());
+
+            // 1 table
+            engine.put("k1", "v1".getBytes(StandardCharsets.UTF_8));
+            engine.flush();
+            assertEquals(1, engine.getSstables().size());
+
+            assertDoesNotThrow(engine::compact);
+            assertEquals(1, engine.getSstables().size(), "Compaction should not alter a single SSTable");
+            assertEquals(ByteBuffer.wrap("v1".getBytes(StandardCharsets.UTF_8)), engine.get("k1"));
+        }
+    }
 }
