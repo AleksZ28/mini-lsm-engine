@@ -15,12 +15,14 @@ public class SSTableReader implements AutoCloseable, Iterable<SSTableEntry> {
     private final FileChannel channel;
     private final SSTableFooter footer;
     private final SSTableIndex index;
+    private final BloomFilter filter;
 
     public SSTableReader(Path path) throws IOException {
         this.path = Objects.requireNonNull(path, "path cannot be null");
         this.channel = FileChannel.open(path, StandardOpenOption.READ);
         try {
             this.footer = SSTableFooter.read(this.channel);
+            this.filter = readBloomFilter(this.channel, this.footer);
             this.index = SSTableIndex.read(this.channel, this.footer);
         } catch (Throwable t) {
             try {
@@ -47,6 +49,10 @@ public class SSTableReader implements AutoCloseable, Iterable<SSTableEntry> {
 
     public WalDecoder.DecodedRecord readRecord(String key) throws IOException {
         if (key == null) {
+            return null;
+        }
+
+        if (filter != null && !filter.mightContain(key)) {
             return null;
         }
 
@@ -86,6 +92,11 @@ public class SSTableReader implements AutoCloseable, Iterable<SSTableEntry> {
         if (key == null) {
             return false;
         }
+
+        if (filter != null && !filter.mightContain(key)) {
+            return false;
+        }
+
         return index.find(key) != null;
     }
 
@@ -117,6 +128,33 @@ public class SSTableReader implements AutoCloseable, Iterable<SSTableEntry> {
 
     FileChannel getChannel() {
         return channel;
+    }
+
+    public BloomFilter getBloomFilter() {
+        return filter;
+    }
+
+    private static BloomFilter readBloomFilter(FileChannel channel, SSTableFooter footer) throws IOException {
+        if (footer.filterLength() == 0) {
+            return null;
+        }
+
+        ByteBuffer buffer = ByteBuffer.allocate(footer.filterLength());
+        long offset = footer.filterOffset();
+
+        while (buffer.hasRemaining()) {
+            int bytesRead = channel.read(buffer, offset);
+            if (bytesRead == -1) {
+                throw new IOException("Unexpected EOF while reading BloomFilter at offset " + offset);
+            }
+            offset += bytesRead;
+        }
+
+        buffer.flip();
+        byte[] filterBytes = new byte[buffer.remaining()];
+        buffer.get(filterBytes);
+
+        return BloomFilter.fromByteArray(filterBytes);
     }
 
     @Override

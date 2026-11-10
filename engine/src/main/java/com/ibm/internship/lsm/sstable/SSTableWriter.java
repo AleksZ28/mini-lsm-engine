@@ -17,6 +17,7 @@ public class SSTableWriter implements AutoCloseable {
     private final FileChannel channel;
     private final Path sstablePath;
     private long currentOffset = 0;
+    private BloomFilter bloomFilter;
     private record IndexEntry(String key, long offset, int recordLength) {}
     private final List<IndexEntry> indexEntryList = new ArrayList<>();
 
@@ -50,6 +51,23 @@ public class SSTableWriter implements AutoCloseable {
     }
 
     public void finish() throws IOException {
+        long filterOffset = currentOffset;
+
+        this.bloomFilter = new BloomFilter(indexEntryList.size(), 0.01);
+
+        for (IndexEntry indexEntry : indexEntryList) {
+            bloomFilter.add(indexEntry.key);
+        }
+        byte[] filterBytes = bloomFilter.toByteArray();
+
+        int filterLength = filterBytes.length;
+
+        ByteBuffer filterBuffer = ByteBuffer.wrap(filterBytes);
+        while (filterBuffer.hasRemaining()) {
+            channel.write(filterBuffer);
+        }
+
+        currentOffset += filterLength;
         long indexOffset = currentOffset;
 
         for (IndexEntry indexEntry : indexEntryList) {
@@ -71,11 +89,13 @@ public class SSTableWriter implements AutoCloseable {
 
         int indexLength = (int) (channel.position() - indexOffset);
 
-        ByteBuffer footer = ByteBuffer.allocate(24);
+        ByteBuffer footer = ByteBuffer.allocate(SSTableFooter.FOOTER_SIZE);
 
         int entryCount = indexEntryList.size();
         long magicNumber = 0x4D494E494C534D31L;
 
+        footer.putLong(filterOffset);
+        footer.putInt(filterLength);
         footer.putLong(indexOffset);
         footer.putInt(indexLength);
         footer.putInt(entryCount);

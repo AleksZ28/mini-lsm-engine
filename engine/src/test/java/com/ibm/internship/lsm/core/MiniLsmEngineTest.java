@@ -3,6 +3,7 @@ package com.ibm.internship.lsm.core;
 import com.ibm.internship.lsm.sstable.IndexEntry;
 import com.ibm.internship.lsm.sstable.SSTableFooter;
 import com.ibm.internship.lsm.sstable.SSTableReader;
+import com.ibm.internship.lsm.sstable.SSTableWriter;
 import com.ibm.internship.lsm.wal.WalEncoder;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -34,50 +35,11 @@ class MiniLsmEngineTest {
         List<TestRecord> sortedRecords = new ArrayList<>(records);
         sortedRecords.sort(Comparator.comparing(TestRecord::key));
 
-        try (FileChannel channel = FileChannel.open(path, StandardOpenOption.CREATE, StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING)) {
-            long currentOffset = 0;
-            List<IndexEntry> indexEntries = new ArrayList<>();
-
+        try (SSTableWriter writer = new SSTableWriter(path)) {
             for (TestRecord r : sortedRecords) {
-                ByteBuffer recordBuf = WalEncoder.encode(r.key(), r.value(), r.isDelete());
-                int recordLen = recordBuf.remaining();
-                long offset = currentOffset;
-
-                while (recordBuf.hasRemaining()) {
-                    channel.write(recordBuf);
-                }
-
-                currentOffset += recordLen;
-                indexEntries.add(new IndexEntry(r.key(), offset, recordLen));
+                writer.append(r.key(), r.value(), r.isDelete());
             }
-
-            long indexOffset = currentOffset;
-
-            for (IndexEntry ie : indexEntries) {
-                byte[] keyBytes = ie.key().getBytes(StandardCharsets.UTF_8);
-                ByteBuffer buf = ByteBuffer.allocate(16 + keyBytes.length);
-                buf.putInt(keyBytes.length);
-                buf.put(keyBytes);
-                buf.putLong(ie.offset());
-                buf.putInt(ie.recordLength());
-                buf.flip();
-
-                while (buf.hasRemaining()) {
-                    channel.write(buf);
-                }
-            }
-
-            int indexLength = (int) (channel.position() - indexOffset);
-            ByteBuffer footer = ByteBuffer.allocate(SSTableFooter.FOOTER_SIZE);
-            footer.putLong(indexOffset);
-            footer.putInt(indexLength);
-            footer.putInt(indexEntries.size());
-            footer.putLong(SSTableFooter.MAGIC_NUMBER);
-            footer.flip();
-
-            while (footer.hasRemaining()) {
-                channel.write(footer);
-            }
+            writer.finish();
         }
 
         return SSTableReader.open(path);

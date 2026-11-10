@@ -21,7 +21,7 @@ public class SSTableWriterTest {
     private static final long EXPECTED_MAGIC_NUMBER = 0x4D494E494C534D31L;
 
     @Test
-    @DisplayName("Should write SSTable with valid Data Section, Index Block and Footer")
+    @DisplayName("Should write SSTable with valid Data Section, Filter Block, Index Block and Footer")
     void shouldWriteSSTableWithCorrectLayoutAndFooter(@TempDir Path tempDir) throws IOException {
         Path sstPath = tempDir.resolve("000001.sst");
 
@@ -36,15 +36,17 @@ public class SSTableWriterTest {
         }
 
         long fileSize = Files.size(sstPath);
-        assertTrue(fileSize > 24, "File size should be larger than footer size");
+        assertTrue(fileSize > SSTableFooter.FOOTER_SIZE, "File size should be larger than footer size");
 
         try (FileChannel channel = FileChannel.open(sstPath, StandardOpenOption.READ)) {
-            // 1. Read Footer (last 24 bytes)
-            ByteBuffer footerBuffer = ByteBuffer.allocate(24);
-            channel.position(fileSize - 24);
+            // 1. Read Footer (last 36 bytes)
+            ByteBuffer footerBuffer = ByteBuffer.allocate(SSTableFooter.FOOTER_SIZE);
+            channel.position(fileSize - SSTableFooter.FOOTER_SIZE);
             channel.read(footerBuffer);
             footerBuffer.flip();
 
+            long filterOffset = footerBuffer.getLong();
+            int filterLength = footerBuffer.getInt();
             long indexOffset = footerBuffer.getLong();
             int indexLength = footerBuffer.getInt();
             int entryCount = footerBuffer.getInt();
@@ -52,9 +54,24 @@ public class SSTableWriterTest {
 
             assertEquals(EXPECTED_MAGIC_NUMBER, magicNumber, "Magic number must match MINILSM1");
             assertEquals(3, entryCount, "Entry count must match number of appended records");
-            assertEquals(fileSize - 24, indexOffset + indexLength, "Index block must end right where footer starts");
+            assertEquals(fileSize - SSTableFooter.FOOTER_SIZE, indexOffset + indexLength, "Index block must end right where footer starts");
+            assertEquals(indexOffset, filterOffset + filterLength, "Filter block must end right where Index block starts");
 
-            // 2. Read Index Block
+            // 2. Read and Verify Filter Block
+            ByteBuffer filterBuffer = ByteBuffer.allocate(filterLength);
+            channel.position(filterOffset);
+            channel.read(filterBuffer);
+            filterBuffer.flip();
+            byte[] filterBytes = new byte[filterBuffer.remaining()];
+            filterBuffer.get(filterBytes);
+
+            BloomFilter bloomFilter = BloomFilter.fromByteArray(filterBytes);
+            assertTrue(bloomFilter.mightContain("key1"), "Filter should contain key1");
+            assertTrue(bloomFilter.mightContain("key2"), "Filter should contain key2");
+            assertTrue(bloomFilter.mightContain("key3"), "Filter should contain key3");
+            assertFalse(bloomFilter.mightContain("absent_key"), "Filter should not contain absent_key");
+
+            // 3. Read Index Block
             ByteBuffer indexBuffer = ByteBuffer.allocate(indexLength);
             channel.position(indexOffset);
             channel.read(indexBuffer);
@@ -90,9 +107,9 @@ public class SSTableWriterTest {
             assertEquals(k2Offset + k2RecLen, k3Offset);
             int k3RecLen = indexBuffer.getInt();
 
-            assertEquals(indexOffset, k3Offset + k3RecLen, "Data section must end right where Index block starts");
+            assertEquals(filterOffset, k3Offset + k3RecLen, "Data section must end right where Filter block starts");
 
-            // 3. Verify Data Section records using WalDecoder
+            // 4. Verify Data Section records using WalDecoder
             // Verify record 1
             ByteBuffer r1Buffer = ByteBuffer.allocate(k1RecLen);
             channel.position(k1Offset);
@@ -126,7 +143,7 @@ public class SSTableWriterTest {
     }
 
     @Test
-    @DisplayName("Should write empty SSTable with zero entries and valid footer")
+    @DisplayName("Should write empty SSTable with zero entries and valid 36-byte footer")
     void shouldWriteEmptySSTable(@TempDir Path tempDir) throws IOException {
         Path sstPath = tempDir.resolve("empty.sst");
 
@@ -134,21 +151,25 @@ public class SSTableWriterTest {
             writer.finish();
         }
 
-        assertEquals(24, Files.size(sstPath), "Empty SSTable should only contain the 24-byte footer");
+        long fileSize = Files.size(sstPath);
+        assertTrue(fileSize >= SSTableFooter.FOOTER_SIZE, "Empty SSTable must be at least the footer size");
 
         try (FileChannel channel = FileChannel.open(sstPath, StandardOpenOption.READ)) {
-            ByteBuffer footerBuffer = ByteBuffer.allocate(24);
+            ByteBuffer footerBuffer = ByteBuffer.allocate(SSTableFooter.FOOTER_SIZE);
+            channel.position(fileSize - SSTableFooter.FOOTER_SIZE);
             channel.read(footerBuffer);
             footerBuffer.flip();
 
+            long filterOffset = footerBuffer.getLong();
+            int filterLength = footerBuffer.getInt();
             long indexOffset = footerBuffer.getLong();
             int indexLength = footerBuffer.getInt();
             int entryCount = footerBuffer.getInt();
             long magicNumber = footerBuffer.getLong();
 
-            assertEquals(0, indexOffset);
-            assertEquals(0, indexLength);
             assertEquals(0, entryCount);
+            assertEquals(0, indexLength);
+            assertEquals(filterOffset + filterLength, indexOffset);
             assertEquals(EXPECTED_MAGIC_NUMBER, magicNumber);
         }
     }
@@ -170,16 +191,19 @@ public class SSTableWriterTest {
         }
 
         try (FileChannel channel = FileChannel.open(sstPath, StandardOpenOption.READ)) {
-            ByteBuffer footerBuffer = ByteBuffer.allocate(24);
-            channel.position(channel.size() - 24);
+            ByteBuffer footerBuffer = ByteBuffer.allocate(SSTableFooter.FOOTER_SIZE);
+            channel.position(channel.size() - SSTableFooter.FOOTER_SIZE);
             channel.read(footerBuffer);
             footerBuffer.flip();
 
+            long filterOffset = footerBuffer.getLong();
+            int filterLength = footerBuffer.getInt();
             long indexOffset = footerBuffer.getLong();
             int indexLength = footerBuffer.getInt();
             int entryCount = footerBuffer.getInt();
 
             assertEquals(1, entryCount);
+            assertTrue(filterLength > 0);
 
             // Read Index
             ByteBuffer indexBuffer = ByteBuffer.allocate(indexLength);

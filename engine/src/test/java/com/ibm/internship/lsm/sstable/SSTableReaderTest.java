@@ -27,50 +27,11 @@ public class SSTableReaderTest {
         List<TestRecord> sortedRecords = new ArrayList<>(records);
         sortedRecords.sort(java.util.Comparator.comparing(TestRecord::key));
 
-        try (FileChannel channel = FileChannel.open(path, StandardOpenOption.CREATE, StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING)) {
-            long currentOffset = 0;
-            List<IndexEntry> indexEntries = new ArrayList<>();
-
+        try (SSTableWriter writer = new SSTableWriter(path)) {
             for (TestRecord r : sortedRecords) {
-                ByteBuffer recordBuf = WalEncoder.encode(r.key(), r.value(), r.isDelete());
-                int recordLen = recordBuf.remaining();
-                long offset = currentOffset;
-
-                while (recordBuf.hasRemaining()) {
-                    channel.write(recordBuf);
-                }
-
-                currentOffset += recordLen;
-                indexEntries.add(new IndexEntry(r.key(), offset, recordLen));
+                writer.append(r.key(), r.value(), r.isDelete());
             }
-
-            long indexOffset = currentOffset;
-
-            for (IndexEntry ie : indexEntries) {
-                byte[] keyBytes = ie.key().getBytes(StandardCharsets.UTF_8);
-                ByteBuffer buf = ByteBuffer.allocate(16 + keyBytes.length);
-                buf.putInt(keyBytes.length);
-                buf.put(keyBytes);
-                buf.putLong(ie.offset());
-                buf.putInt(ie.recordLength());
-                buf.flip();
-
-                while (buf.hasRemaining()) {
-                    channel.write(buf);
-                }
-            }
-
-            int indexLength = (int) (channel.position() - indexOffset);
-            ByteBuffer footer = ByteBuffer.allocate(SSTableFooter.FOOTER_SIZE);
-            footer.putLong(indexOffset);
-            footer.putInt(indexLength);
-            footer.putInt(indexEntries.size());
-            footer.putLong(SSTableFooter.MAGIC_NUMBER);
-            footer.flip();
-
-            while (footer.hasRemaining()) {
-                channel.write(footer);
-            }
+            writer.finish();
         }
     }
 
@@ -229,5 +190,76 @@ public class SSTableReaderTest {
         reader.close();
 
         assertThrows(IOException.class, () -> reader.get("key"));
+    }
+
+    @Test
+    @DisplayName("Should load and use BloomFilter to quickly filter out non-existent keys")
+    void shouldLoadAndUseBloomFilter(@TempDir Path tempDir) throws IOException {
+        Path sstPath = tempDir.resolve("bloom.sst");
+        createSSTable(sstPath, List.of(
+                new TestRecord("alpha", "1".getBytes(StandardCharsets.UTF_8), false),
+                new TestRecord("beta", "2".getBytes(StandardCharsets.UTF_8), false)
+        ));
+
+        try (SSTableReader reader = SSTableReader.open(sstPath)) {
+            BloomFilter filter = reader.getBloomFilter();
+            assertNotNull(filter, "Bloom filter should be loaded from SSTable");
+            assertTrue(filter.mightContain("alpha"));
+            assertTrue(filter.mightContain("beta"));
+            assertFalse(filter.mightContain("gamma_missing_key_xyz"));
+
+            assertNotNull(reader.get("alpha"));
+            assertNull(reader.get("gamma_missing_key_xyz"));
+            assertTrue(reader.containsKey("alpha"));
+            assertFalse(reader.containsKey("gamma_missing_key_xyz"));
+        }
+    }
+
+    @Test
+    @DisplayName("Should support reading SSTable without BloomFilter (filterLength = 0)")
+    void shouldSupportSSTableWithoutBloomFilter(@TempDir Path tempDir) throws IOException {
+        Path sstPath = tempDir.resolve("no_filter.sst");
+        byte[] val = "hello".getBytes(StandardCharsets.UTF_8);
+
+        try (FileChannel channel = FileChannel.open(sstPath, StandardOpenOption.CREATE, StandardOpenOption.WRITE)) {
+            ByteBuffer recordBuf = WalEncoder.encode("foo", val, false);
+            int recLen = recordBuf.remaining();
+            while (recordBuf.hasRemaining()) {
+                channel.write(recordBuf);
+            }
+
+            long indexOffset = recLen;
+            byte[] keyBytes = "foo".getBytes(StandardCharsets.UTF_8);
+            ByteBuffer idxBuf = ByteBuffer.allocate(16 + keyBytes.length);
+            idxBuf.putInt(keyBytes.length);
+            idxBuf.put(keyBytes);
+            idxBuf.putLong(0L);
+            idxBuf.putInt(recLen);
+            idxBuf.flip();
+            while (idxBuf.hasRemaining()) {
+                channel.write(idxBuf);
+            }
+            int indexLength = (int) (channel.position() - indexOffset);
+
+            ByteBuffer footer = ByteBuffer.allocate(SSTableFooter.FOOTER_SIZE);
+            footer.putLong(0L); // filterOffset
+            footer.putInt(0);   // filterLength = 0 (no filter)
+            footer.putLong(indexOffset);
+            footer.putInt(indexLength);
+            footer.putInt(1);
+            footer.putLong(SSTableFooter.MAGIC_NUMBER);
+            footer.flip();
+            while (footer.hasRemaining()) {
+                channel.write(footer);
+            }
+        }
+
+        try (SSTableReader reader = SSTableReader.open(sstPath)) {
+            assertNull(reader.getBloomFilter(), "Bloom filter should be null when filterLength is 0");
+            assertEquals(ByteBuffer.wrap(val), reader.get("foo"));
+            assertTrue(reader.containsKey("foo"));
+            assertNull(reader.get("bar"));
+            assertFalse(reader.containsKey("bar"));
+        }
     }
 }
