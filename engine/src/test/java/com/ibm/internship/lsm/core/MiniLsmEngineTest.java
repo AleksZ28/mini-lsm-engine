@@ -825,4 +825,50 @@ class MiniLsmEngineTest {
             assertEquals(1, engine.getSstables().size(), "Tables must be compacted into 1");
         }
     }
+
+    @Test
+    @DisplayName("Should automatically trigger compaction when sstables reach compactionThreshold")
+    void shouldAutomaticallyTriggerCompactionOnThreshold(@TempDir Path tempDir) throws IOException {
+        Path walPath = tempDir.resolve("engine.wal");
+        Path sstDir = tempDir.resolve("sstables");
+
+        int threshold = 3;
+        try (MiniLsmEngine engine = new MiniLsmEngine(walPath, sstDir, MiniLsmEngine.DEFAULT_THRESHOLD_BYTES, threshold, List.of())) {
+            assertEquals(threshold, engine.getCompactionThreshold());
+
+            // 1st flush
+            engine.put("k1", "v1".getBytes(StandardCharsets.UTF_8));
+            engine.flush();
+            assertEquals(1, engine.getSstables().size());
+
+            // 2nd flush
+            engine.put("k2", "v2".getBytes(StandardCharsets.UTF_8));
+            engine.flush();
+            assertEquals(2, engine.getSstables().size());
+
+            // 3rd flush -> reaches compactionThreshold (3) -> triggers automated background compaction!
+            engine.put("k3", "v3".getBytes(StandardCharsets.UTF_8));
+            engine.flush();
+
+            // Wait for background compaction to finish
+            engine.waitForCompaction();
+
+            // All 3 tables should now be automatically merged into 1 single SSTable
+            assertEquals(1, engine.getSstables().size(), "Tables must be automatically compacted to 1");
+            assertEquals(ByteBuffer.wrap("v1".getBytes(StandardCharsets.UTF_8)), engine.get("k1"));
+            assertEquals(ByteBuffer.wrap("v2".getBytes(StandardCharsets.UTF_8)), engine.get("k2"));
+            assertEquals(ByteBuffer.wrap("v3".getBytes(StandardCharsets.UTF_8)), engine.get("k3"));
+        }
+    }
+
+    @Test
+    @DisplayName("Should validate compactionThreshold in constructor")
+    void shouldValidateCompactionThreshold(@TempDir Path tempDir) {
+        Path walPath = tempDir.resolve("engine.wal");
+        Path sstDir = tempDir.resolve("sstables");
+
+        assertThrows(IllegalArgumentException.class, () ->
+                new MiniLsmEngine(walPath, sstDir, MiniLsmEngine.DEFAULT_THRESHOLD_BYTES, 1, List.of())
+        );
+    }
 }

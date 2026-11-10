@@ -20,6 +20,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -28,6 +29,7 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 public class MiniLsmEngine implements StorageEngine {
     public static final long DEFAULT_THRESHOLD_BYTES = 32 * 1024 * 1024L;
     public static final double FLUSH_RATIO = 0.7;
+    public static final int DEFAULT_COMPACTION_THRESHOLD = 4;
 
     private volatile MemTable activeMemTable;
     private volatile MemTable immutableMemTable;
@@ -42,6 +44,13 @@ public class MiniLsmEngine implements StorageEngine {
         return t;
     });
     private volatile IOException backgroundFlushException;
+    private final int compactionThreshold;
+    private final ExecutorService compactionExecutor = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "lsm-compaction-worker");
+        t.setDaemon(true);
+        return t;
+    });
+    private volatile IOException backgroundCompactionException;
     private volatile Wal wal;
     private final Path walPath;
     private final Path flushingWalPath;
@@ -51,20 +60,27 @@ public class MiniLsmEngine implements StorageEngine {
     private final long flushThresholdBytes;
 
     public MiniLsmEngine(Path walPath, Path sstDir) throws IOException {
-        this(walPath, sstDir, DEFAULT_THRESHOLD_BYTES, loadSSTables(sstDir));
+        this(walPath, sstDir, DEFAULT_THRESHOLD_BYTES, DEFAULT_COMPACTION_THRESHOLD, loadSSTables(sstDir));
     }
 
     public MiniLsmEngine(Path walPath, Path sstDir, long thresholdBytes) throws IOException {
-        this(walPath, sstDir, thresholdBytes, loadSSTables(sstDir));
+        this(walPath, sstDir, thresholdBytes, DEFAULT_COMPACTION_THRESHOLD, loadSSTables(sstDir));
     }
 
     public MiniLsmEngine(Path walPath, Path sstDir, List<SSTableReader> sstables) throws IOException {
-        this(walPath, sstDir, DEFAULT_THRESHOLD_BYTES, sstables);
+        this(walPath, sstDir, DEFAULT_THRESHOLD_BYTES, DEFAULT_COMPACTION_THRESHOLD, sstables);
     }
 
     public MiniLsmEngine(Path walPath, Path sstDir, long thresholdBytes, List<SSTableReader> sstables) throws IOException {
+        this(walPath, sstDir, thresholdBytes, DEFAULT_COMPACTION_THRESHOLD, sstables);
+    }
+
+    public MiniLsmEngine(Path walPath, Path sstDir, long thresholdBytes, int compactionThreshold, List<SSTableReader> sstables) throws IOException {
         if (thresholdBytes <= 0) {
             throw new IllegalArgumentException("thresholdBytes must be positive");
+        }
+        if (compactionThreshold < 2) {
+            throw new IllegalArgumentException("compactionThreshold must be at least 2");
         }
         this.activeMemTable = new MemTable();
         this.walPath = Objects.requireNonNull(walPath, "walPath cannot be null");
@@ -76,6 +92,7 @@ public class MiniLsmEngine implements StorageEngine {
         }
         this.thresholdBytes = thresholdBytes;
         this.flushThresholdBytes = Math.max(1, (long) (thresholdBytes * FLUSH_RATIO));
+        this.compactionThreshold = compactionThreshold;
         this.sstables = new CopyOnWriteArrayList<>(Objects.requireNonNull(sstables, "sstables cannot be null"));
     }
 
@@ -255,6 +272,10 @@ public class MiniLsmEngine implements StorageEngine {
                 immutableMemTable = null;
                 flushLock.notifyAll();
             }
+
+            if (sstables.size() >= compactionThreshold) {
+                triggerBackgroundCompaction();
+            }
         } catch (IOException e) {
             synchronized (flushLock) {
                 backgroundFlushException = e;
@@ -264,11 +285,31 @@ public class MiniLsmEngine implements StorageEngine {
         }
     }
 
+    private void triggerBackgroundCompaction() {
+        if (sstables.size() < compactionThreshold) {
+            return;
+        }
+        compactionExecutor.submit(this::executeCompactionTask);
+    }
+
+    private void executeCompactionTask() {
+        try {
+            compact();
+        } catch (IOException e) {
+            this.backgroundCompactionException = e;
+        }
+    }
+
     private void checkBackgroundException() throws IOException {
-        IOException ex = this.backgroundFlushException;
-        if (ex != null) {
+        IOException flushEx = this.backgroundFlushException;
+        if (flushEx != null) {
             this.backgroundFlushException = null;
-            throw ex;
+            throw flushEx;
+        }
+        IOException compactEx = this.backgroundCompactionException;
+        if (compactEx != null) {
+            this.backgroundCompactionException = null;
+            throw compactEx;
         }
     }
 
@@ -427,6 +468,28 @@ public class MiniLsmEngine implements StorageEngine {
         return flushThresholdBytes;
     }
 
+    public int getCompactionThreshold() {
+        return compactionThreshold;
+    }
+
+    public void waitForCompaction() throws IOException {
+        if (compactionExecutor.isShutdown()) {
+            return;
+        }
+        try {
+            compactionExecutor.submit(() -> {}).get();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("Interrupted while waiting for background compaction", e);
+        } catch (ExecutionException e) {
+            if (e.getCause() instanceof IOException ioEx) {
+                throw ioEx;
+            }
+            throw new IOException("Background compaction failed", e.getCause());
+        }
+        checkBackgroundException();
+    }
+
     @Override
     public void close() throws IOException {
         IOException exception = null;
@@ -443,6 +506,16 @@ public class MiniLsmEngine implements StorageEngine {
             }
         } catch (InterruptedException e) {
             flushExecutor.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
+
+        compactionExecutor.shutdown();
+        try {
+            if (!compactionExecutor.awaitTermination(10, TimeUnit.SECONDS)) {
+                compactionExecutor.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            compactionExecutor.shutdownNow();
             Thread.currentThread().interrupt();
         }
 
