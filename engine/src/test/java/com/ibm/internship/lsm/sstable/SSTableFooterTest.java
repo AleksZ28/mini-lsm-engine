@@ -15,13 +15,24 @@ import static org.junit.jupiter.api.Assertions.*;
 
 public class SSTableFooterTest {
 
-    private void writeFooterFile(Path path, byte[] prefixData, long indexOffset, int indexLength, int entryCount, long magicNumber) throws IOException {
+    private void writeFooterFile(
+            Path path,
+            byte[] prefixData,
+            long filterOffset,
+            int filterLength,
+            long indexOffset,
+            int indexLength,
+            int entryCount,
+            long magicNumber
+    ) throws IOException {
         try (FileChannel channel = FileChannel.open(path, StandardOpenOption.CREATE, StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING)) {
             if (prefixData != null && prefixData.length > 0) {
                 channel.write(ByteBuffer.wrap(prefixData));
             }
 
             ByteBuffer footer = ByteBuffer.allocate(SSTableFooter.FOOTER_SIZE);
+            footer.putLong(filterOffset);
+            footer.putInt(filterLength);
             footer.putLong(indexOffset);
             footer.putInt(indexLength);
             footer.putInt(entryCount);
@@ -35,7 +46,7 @@ public class SSTableFooterTest {
     }
 
     @Test
-    @DisplayName("Should successfully parse a valid SSTable footer")
+    @DisplayName("Should successfully parse a valid SSTable footer with filter block")
     void shouldParseValidFooter(@TempDir Path tempDir) throws IOException {
         Path sstPath = tempDir.resolve("valid.sst");
 
@@ -53,25 +64,36 @@ public class SSTableFooterTest {
 
         byte[] dummyData = new byte[60];
         java.util.Arrays.fill(dummyData, (byte) 0xAA);
-        long indexOffset = dummyData.length;
+
+        byte[] dummyFilter = new byte[16];
+        java.util.Arrays.fill(dummyFilter, (byte) 0xBB);
+
+        long filterOffset = dummyData.length;
+        int filterLength = dummyFilter.length;
+        long indexOffset = filterOffset + filterLength;
         int indexLength = indexBytes.length;
         int entryCount = 3;
 
-        byte[] combined = new byte[dummyData.length + indexLength];
+        byte[] combined = new byte[dummyData.length + filterLength + indexLength];
         System.arraycopy(dummyData, 0, combined, 0, dummyData.length);
-        System.arraycopy(indexBytes, 0, combined, dummyData.length, indexLength);
+        System.arraycopy(dummyFilter, 0, combined, (int) filterOffset, filterLength);
+        System.arraycopy(indexBytes, 0, combined, (int) indexOffset, indexLength);
 
-        writeFooterFile(sstPath, combined, indexOffset, indexLength, entryCount, SSTableFooter.MAGIC_NUMBER);
+        writeFooterFile(sstPath, combined, filterOffset, filterLength, indexOffset, indexLength, entryCount, SSTableFooter.MAGIC_NUMBER);
 
         try (FileChannel channel = FileChannel.open(sstPath, StandardOpenOption.READ)) {
             SSTableFooter footer = SSTableFooter.read(channel);
             assertNotNull(footer);
+            assertEquals(filterOffset, footer.filterOffset());
+            assertEquals(filterLength, footer.filterLength());
             assertEquals(indexOffset, footer.indexOffset());
             assertEquals(indexLength, footer.indexLength());
             assertEquals(entryCount, footer.entryCount());
         }
 
         try (SSTableReader reader = SSTableReader.open(sstPath)) {
+            assertEquals(filterOffset, reader.getFooter().filterOffset());
+            assertEquals(filterLength, reader.getFooter().filterLength());
             assertEquals(indexOffset, reader.getFooter().indexOffset());
             assertEquals(indexLength, reader.getFooter().indexLength());
             assertEquals(entryCount, reader.getFooter().entryCount());
@@ -81,25 +103,27 @@ public class SSTableFooterTest {
     }
 
     @Test
-    @DisplayName("Should successfully parse empty SSTable footer")
+    @DisplayName("Should successfully parse empty SSTable footer (36 bytes, 0 entries)")
     void shouldParseEmptySSTableFooter(@TempDir Path tempDir) throws IOException {
         Path sstPath = tempDir.resolve("empty.sst");
-        writeFooterFile(sstPath, null, 0, 0, 0, SSTableFooter.MAGIC_NUMBER);
+        writeFooterFile(sstPath, null, 0, 0, 0, 0, 0, SSTableFooter.MAGIC_NUMBER);
 
         try (SSTableReader reader = new SSTableReader(sstPath)) {
             SSTableFooter footer = reader.getFooter();
+            assertEquals(0, footer.filterOffset());
+            assertEquals(0, footer.filterLength());
             assertEquals(0, footer.indexOffset());
             assertEquals(0, footer.indexLength());
             assertEquals(0, footer.entryCount());
-            assertEquals(24, reader.getFileSize());
+            assertEquals(SSTableFooter.FOOTER_SIZE, reader.getFileSize());
         }
     }
 
     @Test
-    @DisplayName("Should throw IOException when file size is smaller than 24 bytes")
+    @DisplayName("Should throw IOException when file size is smaller than 36 bytes")
     void shouldThrowWhenFileSizeIsTooSmall(@TempDir Path tempDir) throws IOException {
         Path sstPath = tempDir.resolve("truncated.sst");
-        Files.write(sstPath, new byte[12]); // only 12 bytes
+        Files.write(sstPath, new byte[24]); // 24 bytes is now too small for 36-byte footer
 
         IOException ex = assertThrows(IOException.class, () -> {
             try (SSTableReader ignored = SSTableReader.open(sstPath)) {
@@ -126,7 +150,7 @@ public class SSTableFooterTest {
     void shouldThrowWhenMagicNumberIsCorrupted(@TempDir Path tempDir) throws IOException {
         Path sstPath = tempDir.resolve("bad_magic.sst");
         long invalidMagic = 0xDEADBEEFCAFEBABEL;
-        writeFooterFile(sstPath, null, 0, 0, 0, invalidMagic);
+        writeFooterFile(sstPath, null, 0, 0, 0, 0, 0, invalidMagic);
 
         IOException ex = assertThrows(IOException.class, () -> {
             try (SSTableReader ignored = SSTableReader.open(sstPath)) {
@@ -141,7 +165,7 @@ public class SSTableFooterTest {
         Path sstPath = tempDir.resolve("misaligned.sst");
         byte[] dummyData = new byte[100];
         java.util.Arrays.fill(dummyData, (byte) 0xAA);
-        writeFooterFile(sstPath, dummyData, 70, 40, 2, SSTableFooter.MAGIC_NUMBER);
+        writeFooterFile(sstPath, dummyData, 0, 0, 70, 40, 2, SSTableFooter.MAGIC_NUMBER);
 
         IOException ex = assertThrows(IOException.class, () -> {
             try (SSTableReader ignored = SSTableReader.open(sstPath)) {
@@ -154,7 +178,7 @@ public class SSTableFooterTest {
     @DisplayName("Should throw IOException when entryCount is positive but indexLength is zero")
     void shouldThrowWhenEntryCountPositiveButIndexLengthZero(@TempDir Path tempDir) throws IOException {
         Path sstPath = tempDir.resolve("inconsistent_index.sst");
-        writeFooterFile(sstPath, null, 0, 0, 5, SSTableFooter.MAGIC_NUMBER);
+        writeFooterFile(sstPath, null, 0, 0, 0, 0, 5, SSTableFooter.MAGIC_NUMBER);
 
         IOException ex = assertThrows(IOException.class, () -> {
             try (SSTableReader ignored = SSTableReader.open(sstPath)) {
@@ -168,7 +192,7 @@ public class SSTableFooterTest {
     void shouldThrowWhenEntryCountZeroButIndexLengthPositive(@TempDir Path tempDir) throws IOException {
         Path sstPath = tempDir.resolve("inconsistent_count.sst");
         byte[] dummyIndex = new byte[20];
-        writeFooterFile(sstPath, dummyIndex, 0, 20, 0, SSTableFooter.MAGIC_NUMBER);
+        writeFooterFile(sstPath, dummyIndex, 0, 0, 0, 20, 0, SSTableFooter.MAGIC_NUMBER);
 
         IOException ex = assertThrows(IOException.class, () -> {
             try (SSTableReader ignored = SSTableReader.open(sstPath)) {
@@ -178,10 +202,20 @@ public class SSTableFooterTest {
     }
 
     @Test
+    @DisplayName("Should throw IllegalArgumentException when any constructor parameter is negative")
+    void shouldThrowWhenConstructorParameterIsNegative() {
+        assertThrows(IllegalArgumentException.class, () -> new SSTableFooter(-1, 0, 0, 0, 0));
+        assertThrows(IllegalArgumentException.class, () -> new SSTableFooter(0, -1, 0, 0, 0));
+        assertThrows(IllegalArgumentException.class, () -> new SSTableFooter(0, 0, -1, 0, 0));
+        assertThrows(IllegalArgumentException.class, () -> new SSTableFooter(0, 0, 0, -1, 0));
+        assertThrows(IllegalArgumentException.class, () -> new SSTableFooter(0, 0, 0, 0, -1));
+    }
+
+    @Test
     @DisplayName("Should close file channel cleanly even if footer reading fails")
     void shouldCloseChannelOnFailure(@TempDir Path tempDir) throws IOException {
         Path sstPath = tempDir.resolve("fail_close.sst");
-        writeFooterFile(sstPath, null, 0, 0, 0, 0x123456L); // invalid magic
+        writeFooterFile(sstPath, null, 0, 0, 0, 0, 0, 0x123456L); // invalid magic
 
         assertThrows(IOException.class, () -> {
             try (SSTableReader ignored = new SSTableReader(sstPath)) {

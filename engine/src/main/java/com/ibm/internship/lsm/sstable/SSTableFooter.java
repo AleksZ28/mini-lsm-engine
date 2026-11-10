@@ -5,11 +5,17 @@ import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.util.Objects;
 
-public record SSTableFooter(long indexOffset, int indexLength, int entryCount) {
-    public static final int FOOTER_SIZE = 24;
+public record SSTableFooter(long filterOffset, int filterLength, long indexOffset, int indexLength, int entryCount) {
+    public static final int FOOTER_SIZE = 36;
     public static final long MAGIC_NUMBER = 0x4D494E494C534D31L;
 
     public SSTableFooter {
+        if (filterOffset < 0) {
+            throw new IllegalArgumentException("filterOffset cannot be negative: " + filterOffset);
+        }
+        if (filterLength < 0) {
+            throw new IllegalArgumentException("filterLength cannot be negative: " + filterLength);
+        }
         if (indexOffset < 0) {
             throw new IllegalArgumentException("indexOffset cannot be negative: " + indexOffset);
         }
@@ -19,6 +25,10 @@ public record SSTableFooter(long indexOffset, int indexLength, int entryCount) {
         if (entryCount < 0) {
             throw new IllegalArgumentException("entryCount cannot be negative: " + entryCount);
         }
+    }
+
+    public SSTableFooter(long indexOffset, int indexLength, int entryCount) {
+        this(0, 0, indexOffset, indexLength, entryCount);
     }
 
     public static SSTableFooter read(FileChannel channel) throws IOException {
@@ -50,6 +60,8 @@ public record SSTableFooter(long indexOffset, int indexLength, int entryCount) {
             throw new IOException("Truncated footer buffer: expected at least " + FOOTER_SIZE + " bytes, got " + buffer.remaining());
         }
 
+        long filterOffset = buffer.getLong();
+        int filterLength = buffer.getInt();
         long indexOffset = buffer.getLong();
         int indexLength = buffer.getInt();
         int entryCount = buffer.getInt();
@@ -62,10 +74,10 @@ public record SSTableFooter(long indexOffset, int indexLength, int entryCount) {
             ));
         }
 
-        if (indexOffset < 0 || indexLength < 0 || entryCount < 0) {
+        if (filterOffset < 0 || filterLength < 0 || indexOffset < 0 || indexLength < 0 || entryCount < 0) {
             throw new IOException(String.format(
-                    "Corrupted SSTable footer: invalid negative field (indexOffset=%d, indexLength=%d, entryCount=%d)",
-                    indexOffset, indexLength, entryCount
+                    "Corrupted SSTable footer: invalid negative field (filterOffset=%d, filterLength=%d, indexOffset=%d, indexLength=%d, entryCount=%d)",
+                    filterOffset, filterLength, indexOffset, indexLength, entryCount
             ));
         }
 
@@ -84,6 +96,6 @@ public record SSTableFooter(long indexOffset, int indexLength, int entryCount) {
             throw new IOException("Corrupted SSTable footer: entryCount is " + entryCount + " but indexLength is 0");
         }
 
-        return new SSTableFooter(indexOffset, indexLength, entryCount);
+        return new SSTableFooter(filterOffset, filterLength, indexOffset, indexLength, entryCount);
     }
 }

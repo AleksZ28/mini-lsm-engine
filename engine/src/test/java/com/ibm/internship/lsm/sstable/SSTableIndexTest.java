@@ -48,6 +48,8 @@ public class SSTableIndexTest {
             }
 
             ByteBuffer footer = ByteBuffer.allocate(SSTableFooter.FOOTER_SIZE);
+            footer.putLong(0L); // filterOffset
+            footer.putInt(0);   // filterLength
             footer.putLong(dataSize);
             footer.putInt(indexLength);
             footer.putInt(entryCount);
