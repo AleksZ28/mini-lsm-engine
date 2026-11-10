@@ -9,6 +9,7 @@ All multibyte integers (int, long) are stored in standard Big-Endian byte order 
       └── ...
     [Filter Block]
       ├── HashCount:    4 bytes - number of hash functions
+      ├── NumBits:      4 bytes - total number of bits in the filter
       └── BitData:      raw bytes of the bitset array
     [Index Block]
       ├── Index Entry 1: [KeyLen: 4B][Key: UTF-8][Offset: 8B][RecordLen: 4B]
@@ -36,6 +37,7 @@ Records are ordered lexicographically by key. Format is identical to the WAL rec
 ## 2. Filter Block (Bloom Filter)
 Contains serialized probabilistic filter for fast key existence checks without disk I/O:
 - `HashCount` (4 bytes): Number of hash functions.
+- `NumBits` (4 bytes): Total number of bits in the filter.
 - `BitData`: Serialized bits representation (bytes).
 
 ## 3. Index Block
