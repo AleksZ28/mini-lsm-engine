@@ -7,6 +7,7 @@ import com.ibm.internship.lsm.sstable.SSTableWriter;
 import com.ibm.internship.lsm.wal.OpType;
 import com.ibm.internship.lsm.wal.Wal;
 import com.ibm.internship.lsm.wal.WalDecoder;
+import com.ibm.internship.lsm.compaction.Compactor;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -30,8 +31,10 @@ public class MiniLsmEngine implements StorageEngine {
 
     private volatile MemTable activeMemTable;
     private volatile MemTable immutableMemTable;
+    private final Compactor compactor = new Compactor();
     private final Object flushLock = new Object();
     private final Object walLock = new Object();
+    private final Object compactionLock = new Object();
     private final ReentrantReadWriteLock rwLock = new ReentrantReadWriteLock();
     private final ExecutorService flushExecutor = Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "lsm-flush-worker");
@@ -43,7 +46,7 @@ public class MiniLsmEngine implements StorageEngine {
     private final Path walPath;
     private final Path flushingWalPath;
     private final Path sstDir;
-    private final List<SSTableReader> sstables;
+    private volatile List<SSTableReader> sstables;
     private final long thresholdBytes;
     private final long flushThresholdBytes;
 
@@ -121,7 +124,8 @@ public class MiniLsmEngine implements StorageEngine {
             }
         }
 
-        for (SSTableReader sstable : sstables) {
+        List<SSTableReader> currentSstables = this.sstables;
+        for (SSTableReader sstable : currentSstables) {
             WalDecoder.DecodedRecord record = sstable.readRecord(key);
             if (record != null) {
                 if (record.getOpType() == OpType.DELETE) {
@@ -283,6 +287,45 @@ public class MiniLsmEngine implements StorageEngine {
         }
     }
 
+    @Override
+    public void compact() throws IOException {
+        synchronized (compactionLock) {
+            waitForFlush();
+
+            if(sstables.size() < 2) {
+                return;
+            }
+
+            List<SSTableReader> toCompact = new ArrayList<>(sstables);
+
+            long newIndex = findHighestSstIndex() + 1;
+            Path compactedPath = sstDir.resolve(newIndex + ".sst");
+
+            SSTableReader compactReader = compactor.compact(toCompact, compactedPath);
+
+            rwLock.writeLock().lock();
+            try {
+                List<SSTableReader> updatedSstables = new ArrayList<>(this.sstables);
+                updatedSstables.removeAll(toCompact);
+                updatedSstables.add(compactReader);
+                updatedSstables.sort((r1, r2) -> Long.compare(
+                        parseSstIndex(r2.getPath()),
+                        parseSstIndex(r1.getPath())
+                ));
+                this.sstables = new CopyOnWriteArrayList<>(updatedSstables);
+            } finally {
+                rwLock.writeLock().unlock();
+            }
+
+            for (SSTableReader oldReader : toCompact) {
+                try {
+                    oldReader.close();
+                } catch (IOException ignored) {}
+                Files.deleteIfExists(oldReader.getPath());
+            }
+        }
+    }
+
     private long findHighestSstIndex() throws IOException {
         if (!Files.exists(sstDir) || !Files.isDirectory(sstDir)) {
             return 0;
@@ -304,7 +347,12 @@ public class MiniLsmEngine implements StorageEngine {
 
     public void addSSTable(SSTableReader sstable) {
         Objects.requireNonNull(sstable, "sstable cannot be null");
-        sstables.addFirst(sstable);
+        rwLock.writeLock().lock();
+        try {
+            sstables.addFirst(sstable);
+        } finally {
+            rwLock.writeLock().unlock();
+        }
     }
 
     public List<SSTableReader> getSstables() {
@@ -398,22 +446,12 @@ public class MiniLsmEngine implements StorageEngine {
             Thread.currentThread().interrupt();
         }
 
-        synchronized (flushLock) {
-            rwLock.writeLock().lock();
-            try {
+        synchronized (compactionLock) {
+            synchronized (flushLock) {
+                rwLock.writeLock().lock();
                 try {
-                    wal.close();
-                } catch (IOException e) {
-                    if (exception == null) {
-                        exception = e;
-                    } else {
-                        exception.addSuppressed(e);
-                    }
-                }
-
-                for (SSTableReader sstable : sstables) {
                     try {
-                        sstable.close();
+                        wal.close();
                     } catch (IOException e) {
                         if (exception == null) {
                             exception = e;
@@ -421,9 +459,21 @@ public class MiniLsmEngine implements StorageEngine {
                             exception.addSuppressed(e);
                         }
                     }
+
+                    for (SSTableReader sstable : sstables) {
+                        try {
+                            sstable.close();
+                        } catch (IOException e) {
+                            if (exception == null) {
+                                exception = e;
+                            } else {
+                                exception.addSuppressed(e);
+                            }
+                        }
+                    }
+                } finally {
+                    rwLock.writeLock().unlock();
                 }
-            } finally {
-                rwLock.writeLock().unlock();
             }
         }
 
