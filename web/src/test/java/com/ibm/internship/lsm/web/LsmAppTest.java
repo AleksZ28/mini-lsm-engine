@@ -188,4 +188,61 @@ class LsmAppTest {
         assertTrue(afterFlushResponse.body().contains("\"sstableCount\":1"));
         assertTrue(afterFlushResponse.body().contains("1.sst"));
     }
+
+    @Test
+    @DisplayName("Should successfully trigger compaction over HTTP POST /api/compact")
+    void shouldTriggerCompactOverHttp() throws Exception {
+        HttpRequest getStatsRequest = HttpRequest.newBuilder()
+                .uri(URI.create(baseUrl + "/api/stats"))
+                .GET()
+                .build();
+
+        // 1. Create 1st SSTable
+        HttpRequest post1 = HttpRequest.newBuilder()
+                .uri(URI.create(baseUrl + "/api/entries"))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString("{\"key\": \"k1\", \"value\": \"v1\"}"))
+                .build();
+        assertEquals(201, httpClient.send(post1, HttpResponse.BodyHandlers.ofString()).statusCode());
+
+        HttpRequest flushRequest = HttpRequest.newBuilder()
+                .uri(URI.create(baseUrl + "/api/flush"))
+                .POST(HttpRequest.BodyPublishers.noBody())
+                .build();
+        assertEquals(204, httpClient.send(flushRequest, HttpResponse.BodyHandlers.ofString()).statusCode());
+
+        // 2. Create 2nd SSTable
+        HttpRequest post2 = HttpRequest.newBuilder()
+                .uri(URI.create(baseUrl + "/api/entries"))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString("{\"key\": \"k2\", \"value\": \"v2\"}"))
+                .build();
+        assertEquals(201, httpClient.send(post2, HttpResponse.BodyHandlers.ofString()).statusCode());
+        assertEquals(204, httpClient.send(flushRequest, HttpResponse.BodyHandlers.ofString()).statusCode());
+
+        HttpResponse<String> beforeCompactStats = httpClient.send(getStatsRequest, HttpResponse.BodyHandlers.ofString());
+        assertEquals(200, beforeCompactStats.statusCode());
+        assertTrue(beforeCompactStats.body().contains("\"sstableCount\":2"));
+
+        // 3. POST /api/compact -> 204 No Content
+        HttpRequest compactRequest = HttpRequest.newBuilder()
+                .uri(URI.create(baseUrl + "/api/compact"))
+                .POST(HttpRequest.BodyPublishers.noBody())
+                .build();
+
+        HttpResponse<String> compactResponse = httpClient.send(compactRequest, HttpResponse.BodyHandlers.ofString());
+        assertEquals(204, compactResponse.statusCode());
+
+        // 4. Verify sstables merged into 1
+        HttpResponse<String> afterCompactStats = httpClient.send(getStatsRequest, HttpResponse.BodyHandlers.ofString());
+        assertEquals(200, afterCompactStats.statusCode());
+        assertTrue(afterCompactStats.body().contains("\"sstableCount\":1"));
+
+        // 5. Verify keys remain readable
+        HttpRequest getK1 = HttpRequest.newBuilder().uri(URI.create(baseUrl + "/api/entries/k1")).GET().build();
+        assertEquals("v1", httpClient.send(getK1, HttpResponse.BodyHandlers.ofString()).body());
+
+        HttpRequest getK2 = HttpRequest.newBuilder().uri(URI.create(baseUrl + "/api/entries/k2")).GET().build();
+        assertEquals("v2", httpClient.send(getK2, HttpResponse.BodyHandlers.ofString()).body());
+    }
 }
