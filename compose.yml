@@ -1,0 +1,10 @@
+services:
+  mini-lsm:
+    build: .
+    container_name: mini-lsm-app
+    ports:
+      - "7070:7070"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - PORT=7070
