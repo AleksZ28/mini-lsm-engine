@@ -11,6 +11,7 @@ import com.ibm.internship.lsm.compaction.Compactor;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.channels.ClosedChannelException;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -141,9 +142,35 @@ public class MiniLsmEngine implements StorageEngine {
             }
         }
 
+        return getFromSSTables(key);
+    }
+
+    private ByteBuffer getFromSSTables(String key) {
         List<SSTableReader> currentSstables = this.sstables;
         for (SSTableReader sstable : currentSstables) {
-            WalDecoder.DecodedRecord record = sstable.readRecord(key);
+            WalDecoder.DecodedRecord record;
+            try {
+                record = sstable.readRecord(key);
+            } catch (ClosedChannelException e) {
+                // If an old SSTable was closed during concurrent compaction,
+                // re-fetch the latest swapped SSTables and retry.
+                List<SSTableReader> latest = this.sstables;
+                for (SSTableReader latestSst : latest) {
+                    try {
+                        WalDecoder.DecodedRecord rec = latestSst.readRecord(key);
+                        if (rec != null) {
+                            return rec.getOpType() == OpType.DELETE
+                                    ? null
+                                    : ByteBuffer.wrap(rec.getValueBytes()).asReadOnlyBuffer();
+                        }
+                    } catch (IOException ignored) {}
+                }
+                return null;
+            } catch (IOException e) {
+                System.err.printf("Warning: Error reading key '%s' from SSTable '%s': %s. Continuing.%n",
+                        key, sstable.getPath(), e.getMessage());
+                continue;
+            }
             if (record != null) {
                 if (record.getOpType() == OpType.DELETE) {
                     return null;
@@ -268,13 +295,13 @@ public class MiniLsmEngine implements StorageEngine {
             addSSTable(SSTableReader.open(sstPath));
             Files.deleteIfExists(flushingWalPath);
 
+            if (sstables.size() >= compactionThreshold) {
+                triggerBackgroundCompaction();
+            }
+
             synchronized (flushLock) {
                 immutableMemTable = null;
                 flushLock.notifyAll();
-            }
-
-            if (sstables.size() >= compactionThreshold) {
-                triggerBackgroundCompaction();
             }
         } catch (IOException e) {
             synchronized (flushLock) {
@@ -416,21 +443,14 @@ public class MiniLsmEngine implements StorageEngine {
         sstFiles.sort((p1, p2) -> Long.compare(parseSstIndex(p2), parseSstIndex(p1)));
 
         List<SSTableReader> readers = new ArrayList<>();
-        try {
-            for (Path file : sstFiles) {
+        for (Path file : sstFiles) {
+            try {
                 readers.add(SSTableReader.open(file));
+            } catch (IOException e) {
+                System.err.printf("Warning: Skipping corrupted SSTable '%s': %s%n", file, e.getMessage());
             }
-            return readers;
-        } catch (IOException e) {
-            for (SSTableReader reader : readers) {
-                try {
-                    reader.close();
-                } catch (IOException suppressed) {
-                    e.addSuppressed(suppressed);
-                }
-            }
-            throw e;
         }
+        return readers;
     }
 
     private static long parseSstIndex(Path file) {

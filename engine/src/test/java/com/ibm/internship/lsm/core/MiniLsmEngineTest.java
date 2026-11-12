@@ -1,21 +1,16 @@
 package com.ibm.internship.lsm.core;
 
-import com.ibm.internship.lsm.sstable.IndexEntry;
-import com.ibm.internship.lsm.sstable.SSTableFooter;
 import com.ibm.internship.lsm.sstable.SSTableReader;
 import com.ibm.internship.lsm.sstable.SSTableWriter;
-import com.ibm.internship.lsm.wal.WalEncoder;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -832,5 +827,36 @@ class MiniLsmEngineTest {
         assertThrows(IllegalArgumentException.class, () ->
                 new MiniLsmEngine(walPath, sstDir, MiniLsmEngine.DEFAULT_THRESHOLD_BYTES, 1, List.of())
         );
+    }
+
+    @Test
+    @DisplayName("Should skip corrupted SSTable during startup without crashing the engine")
+    void shouldSkipCorruptedSSTableOnStartup(@TempDir Path tempDir) throws IOException {
+        Path walPath = tempDir.resolve("engine.wal");
+        Path sstDir = tempDir.resolve("sstables");
+        Files.createDirectories(sstDir);
+
+        // 1. Create a valid SSTable (1.sst)
+        try (MiniLsmEngine setupEngine = new MiniLsmEngine(walPath, sstDir)) {
+            setupEngine.put("valid_key", "valid_val".getBytes(StandardCharsets.UTF_8));
+            setupEngine.flush();
+        }
+        assertTrue(Files.exists(sstDir.resolve("1.sst")));
+
+        // 2. Create a corrupted SSTable (2.sst with random invalid bytes)
+        Path corruptSst = sstDir.resolve("2.sst");
+        Files.write(corruptSst, new byte[]{0x01, 0x02, 0x03, 0x04});
+
+        // 3. Starting the engine must NOT crash with IOException
+        assertDoesNotThrow(() -> {
+            try (MiniLsmEngine engine = new MiniLsmEngine(walPath, sstDir)) {
+                // Only the valid 1.sst should be loaded
+                assertEquals(1, engine.getSstables().size());
+                assertEquals(
+                        ByteBuffer.wrap("valid_val".getBytes(StandardCharsets.UTF_8)),
+                        engine.get("valid_key")
+                );
+            }
+        });
     }
 }
