@@ -70,6 +70,7 @@ function addActivityLog(type, message) {
   else if (type === "GET") badgeColor = "bg-blue-500/20 text-blue-300 border-blue-500/40";
   else if (type === "DELETE") badgeColor = "bg-rose-500/20 text-rose-300 border-rose-500/40";
   else if (type === "FLUSH") badgeColor = "bg-cyan-500/20 text-cyan-300 border-cyan-500/40 font-bold";
+  else if (type === "COMPACT") badgeColor = "bg-purple-500/20 text-purple-300 border-purple-500/40 font-bold";
   else if (type === "BENCHMARK") badgeColor = "bg-purple-500/20 text-purple-300 border-purple-500/40";
   else if (type === "INFO") badgeColor = "bg-amber-500/20 text-amber-300 border-amber-500/40";
   else if (type === "ERROR") badgeColor = "bg-red-500/30 text-red-300 border-red-500/50 font-bold";
@@ -358,10 +359,38 @@ async function handleInsertRandomKeys() {
   }
 }
 
-function handleCompactionNotImplemented() {
-  showNotification("Manual Compaction is yet to be implemented in the engine.", "warning");
-  console.log("Action skipped: Compaction is yet to be implemented.");
-  addActivityLog("INFO", "Compaction skipped: Action yet to be implemented.");
+async function triggerCompact() {
+  const compactBtn = document.getElementById("btnCompact");
+  if (compactBtn) {
+    compactBtn.disabled = true;
+    compactBtn.classList.add("opacity-50", "cursor-not-allowed");
+  }
+
+  const start = performance.now();
+  addActivityLog("COMPACT", "Triggering manual SSTable compaction...");
+
+  try {
+    const res = await fetch("/api/compact", { method: "POST" });
+    const duration = (performance.now() - start).toFixed(1);
+
+    if (res.ok) {
+      addActivityLog("COMPACT", `SSTables compacted successfully [${duration} ms]`);
+      showNotification("SSTables compacted successfully", "info");
+      await updateStats();
+    } else {
+      const errText = await res.text();
+      addActivityLog("ERROR", `Compaction failed (${res.status}): ${errText}`);
+      showNotification(`Compaction failed: ${errText}`, "error");
+    }
+  } catch (err) {
+    addActivityLog("ERROR", `Compaction error: ${err.message}`);
+    showNotification(`Compaction error: ${err.message}`, "error");
+  } finally {
+    if (compactBtn) {
+      compactBtn.disabled = false;
+      compactBtn.classList.remove("opacity-50", "cursor-not-allowed");
+    }
+  }
 }
 
 async function checkEngineStatus() {
@@ -392,7 +421,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   document.getElementById("btnGet")?.addEventListener("click", handleGet);
   document.getElementById("btnDelete")?.addEventListener("click", handleDelete);
   document.getElementById("btnInsertRandom")?.addEventListener("click", handleInsertRandomKeys);
-  document.getElementById("btnCompact")?.addEventListener("click", handleCompactionNotImplemented);
+  document.getElementById("btnCompact")?.addEventListener("click", triggerCompact);
   document.getElementById("btnClearLog")?.addEventListener("click", clearLog);
 
   checkEngineStatus();

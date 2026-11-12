@@ -57,6 +57,11 @@ public class LsmApp {
                 ctx.status(204);
             });
 
+            config.routes.post("/api/compact", ctx -> {
+                engine.compact();
+                ctx.status(204);
+            });
+
             config.routes.get("/api/stats", statsController::getStats);
         });
     }
