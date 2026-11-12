@@ -39,4 +39,5 @@ docker compose down
 - `GET /api/entries/{key}` - Get value by key
 - `DELETE /api/entries/{key}` - Delete a key
 - `POST /api/flush` - Trigger manual flush from MemTable to SSTable
+- `POST /api/compact` - Trigger manual compaction
 - `GET /api/stats` - Get engine stats
